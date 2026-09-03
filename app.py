@@ -142,16 +142,32 @@ def proximo_dia_util(data_inicio_str, quantidade, feriados):
     return data.strftime("%d/%m/%Y")
 
 def proximo_dia_corrido(data_inicio_str, quantidade):
-    """Retorna a data final após adicionar N dias corridos (inclui fins de semana e feriados)."""
+    """Retorna a data final (DD/MM/AAAA) após adicionar N dias corridos (inclui FDS e feriados)."""
     data = datetime.strptime(data_inicio_str, "%d/%m/%Y")
     data_fim = data + timedelta(days=quantidade - 1)
     return data_fim.strftime("%d/%m/%Y")
 
+# =============================================================================
+# CORREÇÃO DA FUNÇÃO DE PLANTÃO – referência absoluta
+# =============================================================================
+
+# Data de referência: 01/01/2027 -> Equipe 2
+DATA_REF = datetime(2027, 1, 1)
+ORDEM_PLANTAO = [2, 3, 4, 1]
+
 def equipe_plantao_para_data(data_str):
+    """
+    Retorna o ID da equipe (1 a 4) que está de plantão em uma determinada data,
+    usando uma referência absoluta (01/01/2027 = Equipe 2).
+    """
     dt = datetime.strptime(data_str, "%d/%m/%Y")
-    dia_ano = dt.timetuple().tm_yday
-    ordem = [2, 3, 4, 1]
-    return ordem[(dia_ano - 1) % 4]
+    diff = (dt - DATA_REF).days
+    pos = diff % 4
+    return ORDEM_PLANTAO[pos]
+
+# =============================================================================
+# VALIDAÇÕES (prioridade, conflito)
+# =============================================================================
 
 def verificar_prioridade(usuario_id):
     try:
@@ -244,7 +260,7 @@ def login():
         if not login or not senha:
             return render_template('login.html', erro="Preencha todos os campos.")
         try:
-            # Verifica se é admin de equipe (aba Equipes)
+            # Admin de equipe
             ws_equipes = get_worksheet("Equipes")
             equipes = ws_equipes.get_all_records()
             admin = next((eq for eq in equipes if eq.get("login_admin") == login), None)
@@ -257,7 +273,7 @@ def login():
                 session['login'] = login
                 return redirect(url_for('admin_panel'))
 
-            # Verifica se é usuário comum (aba Usuarios)
+            # Usuário comum
             ws_usuarios = get_worksheet("Usuarios")
             usuarios = ws_usuarios.get_all_records()
             user = next((u for u in usuarios if u.get("login") == login), None)
@@ -294,10 +310,7 @@ def logout():
 def index():
     if session.get('is_admin'):
         return redirect(url_for('admin_panel'))
-    return render_template('index.html', 
-                           usuario=session.get('nome'), 
-                           is_admin=session.get('is_admin'),
-                           equipe_id=session.get('equipe_id'))
+    return render_template('index.html', usuario=session.get('nome'), is_admin=session.get('is_admin'))
 
 @app.route('/admin')
 @admin_required
@@ -371,12 +384,11 @@ def relatorio_pdf():
         """
         for r in m['reservas']:
             tipo = r.get('tipo', 'normal')
-            dias_texto = f"{r['dias_uteis']} {'úteis' if tipo == 'normal' else 'corridos'}"
             tabela += f"""
                 <tr>
                     <td>{r['data_inicio']} a {r['data_fim']}</td>
-                    <td>{dias_texto}</td>
-                    <td>{tipo.capitalize()}</td>
+                    <td>{r['dias_uteis']}</td>
+                    <td>{'Premium' if tipo == 'premium' else 'Normal'}</td>
                     <td>{r['status']}</td>
                 </tr>
             """
@@ -469,7 +481,7 @@ def relatorio_pdf():
         return jsonify({"error": f"Erro ao gerar PDF: {str(e)}"}), 500
 
 # =============================================================================
-# API ADMIN – GERENCIAR ADMINISTRADORES DE EQUIPE (apenas global_admin)
+# API ADMIN – GERENCIAR ADMINISTRADORES DE EQUIPE
 # =============================================================================
 
 @app.route('/api/admin/equipes', methods=['GET', 'PUT', 'DELETE'])
@@ -490,7 +502,6 @@ def admin_equipes():
         equipe_id = data.get('id')
         if not equipe_id:
             return jsonify({"error": "ID da equipe obrigatório."}), 400
-
         try:
             ws_equipes = get_worksheet("Equipes")
             equipes = ws_equipes.get_all_records()
@@ -641,12 +652,10 @@ def api_reservas():
         dias_uteis = int(data['dias_uteis'])
         tipo = data.get('tipo', 'normal')
 
-        # Validações de dias conforme tipo
+        # Validações de acordo com o tipo
         if tipo == 'premium':
             if dias_uteis not in [15, 30]:
-                return jsonify({"error": "Férias Premium: 15 ou 30 dias corridos."}), 400
-            config = ler_config()
-            feriados = []  # não usado para premium, mas mantido
+                return jsonify({"error": "Férias Premium deve ter 15 ou 30 dias."}), 400
             data_fim = proximo_dia_corrido(data_inicio, dias_uteis)
         else:
             if dias_uteis not in [10, 15, 25]:
@@ -660,7 +669,7 @@ def api_reservas():
         if not pode:
             return jsonify({"error": msg}), 403
 
-        # Verificar total de dias do usuário (soma de dias independente do tipo)
+        # Verificar total de dias do usuário
         ferias = get_cache("ferias")
         total_atual = sum([int(r.get('dias_uteis', 0)) for r in ferias if str(r.get('usuario_id')) == str(user_id)])
         if total_atual + dias_uteis > 25:
@@ -673,7 +682,7 @@ def api_reservas():
             return jsonify({"error": "Usuário não encontrado."}), 404
         equipe_id = user['equipe_id']
 
-        # Conflito de plantão (independente do tipo)
+        # Conflito de plantão
         pode, msg = verificar_conflito_plantao(equipe_id, data_inicio, data_fim, user_id)
         if not pode:
             return jsonify({"error": msg}), 409
@@ -712,7 +721,7 @@ def api_reservas():
             return jsonify({"error": str(e)}), 500
 
 # =============================================================================
-# API ADMIN – USUÁRIOS (com suporte a global_admin)
+# API ADMIN – USUÁRIOS
 # =============================================================================
 
 @app.route('/api/admin/usuarios', methods=['GET', 'POST', 'PUT', 'DELETE'])
