@@ -28,7 +28,7 @@
         .modal-body .resumo { background: #f8f9fa; padding: 10px; border-radius: 5px; }
     </style>
 </head>
-<body data-usuario-id="{{ session.get('user_id') }}">
+<body>
     <div class="container">
         <div class="d-flex justify-content-between align-items-center mb-3">
             <h2>📅 Férias - {{ usuario }}</h2>
@@ -131,7 +131,6 @@
                             tooltip += '\nReservas: ' + dia.reservas.map(r => r.usuario + ' ('+r.inicio+' a '+r.fim+')').join('; ');
                         }
 
-                        // Construção segura do atributo onclick usando dados
                         let reservasJson = JSON.stringify(dia.reservas).replace(/"/g, '&quot;');
                         let onclickAttr = selecionavel ? `onclick="abrirModal('${dia.data}')"` : '';
 
@@ -145,7 +144,6 @@
                 });
             }
 
-            // Função global para ser chamada pelo onclick
             window.abrirModal = function(data) {
                 dataSelecionada = data;
                 $('#data-inicio-selecionada').text(data);
@@ -205,7 +203,7 @@
             $('#btn-confirmar-reserva').click(function() {
                 const inicio = dataSelecionada;
                 const dias = parseInt($('#dias-opcao').val());
-                const usuarioId = document.body.dataset.usuarioId;
+                const usuarioId = "{{ session.get('user_id') | tojson | safe }}";
                 $.ajax({
                     url: '/api/reservas',
                     method: 'POST',

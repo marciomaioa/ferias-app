@@ -2,5 +2,6 @@ Flask
 gspread
 oauth2client
 holidays
-python-dotenv  # se for usar .env localmente
-gunicorn       # necessário para o Render
+python-dotenv
+gunicorn
+weasyprint

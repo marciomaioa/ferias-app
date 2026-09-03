@@ -3,14 +3,18 @@ import os
 import json
 import base64
 import time
+import io
 from datetime import datetime, timedelta
 from functools import wraps
 
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for, send_file
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from werkzeug.security import generate_password_hash, check_password_hash
 import holidays
+import weasyprint
+from weasyprint import HTML, CSS
+from weasyprint.text.fonts import FontConfiguration
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key")
@@ -129,16 +133,8 @@ def calcular_dias_uteis(data_inicio_str, data_fim_str, feriados):
     return dias
 
 def proximo_dia_util(data_inicio_str, quantidade, feriados):
-    """
-    Retorna a data final (DD/MM/AAAA) após adicionar N dias úteis,
-    considerando a data de início como o 1º dia útil.
-    Ex: 04/01 + 10 dias úteis = 15/01 (pois 04/01 é dia 1, 05/01 é dia 2, ...)
-    """
     data = datetime.strptime(data_inicio_str, "%d/%m/%Y")
-    # Se a data de início já for útil (não FDS e não feriado), ela conta como dia 1
     dias_contados = 1 if (data.weekday() < 5 and data.strftime("%d/%m/%Y") not in feriados) else 0
-
-    # Enquanto não atingir a quantidade desejada, avança um dia
     while dias_contados < quantidade:
         data += timedelta(days=1)
         if data.weekday() < 5 and data.strftime("%d/%m/%Y") not in feriados:
@@ -159,7 +155,6 @@ def verificar_prioridade(usuario_id):
             return False, "Usuário não encontrado."
         equipe_id = usuario["equipe_id"]
         nivel = usuario["nivel"]
-        # Usuários da mesma equipe com nível inferior
         inferiores = [u for u in usuarios if u.get("equipe_id") == equipe_id and u.get("nivel", 999) < nivel]
         if not inferiores:
             return True, ""
@@ -170,13 +165,9 @@ def verificar_prioridade(usuario_id):
                 return False, f"Usuário {inf.get('nome')} (nível {inf.get('nivel')}) ainda tem {total} dias; precisa de 25."
         return True, ""
     except Exception as e:
-        return False, f"Erro ao verificar prioridade: {e}"
+        return False, f"Erro: {e}"
 
 def verificar_conflito_plantao(equipe_id, data_inicio_str, data_fim_str, usuario_id, reserva_id=None):
-    """
-    Verifica se a nova reserva (para usuario_id) deixaria a equipe desfalcada em algum plantão.
-    Regra: no máximo 1 membro da equipe pode estar de férias em um dia de plantão.
-    """
     try:
         usuarios = get_cache("usuarios")
         membros = [u for u in usuarios if u.get("equipe_id") == equipe_id]
@@ -190,7 +181,6 @@ def verificar_conflito_plantao(equipe_id, data_inicio_str, data_fim_str, usuario
         while atual <= fim:
             data_str = atual.strftime("%d/%m/%Y")
             if equipe_plantao_para_data(data_str) == equipe_id:
-                # Conta reservas existentes
                 ferias_no_dia = 0
                 for r in ferias:
                     r_inicio = datetime.strptime(r["data_inicio"], "%d/%m/%Y")
@@ -199,19 +189,17 @@ def verificar_conflito_plantao(equipe_id, data_inicio_str, data_fim_str, usuario
                         user_reserva = next((u for u in usuarios if str(u.get("id")) == str(r.get("usuario_id"))), None)
                         if user_reserva and user_reserva.get("equipe_id") == equipe_id:
                             ferias_no_dia += 1
-                # Adiciona a nova reserva (se o dia estiver dentro do período da nova reserva)
                 if atual >= inicio and atual <= fim:
                     ferias_no_dia += 1
-                # Regra: no máximo 1 pessoa de férias no plantão
                 if ferias_no_dia > 1:
                     return False, f"No dia {data_str} (plantão Equipe {equipe_id}) {ferias_no_dia} membros estão de férias. Só é permitido 1."
             atual += timedelta(days=1)
         return True, ""
     except Exception as e:
-        return False, f"Erro ao verificar conflito: {e}"
+        return False, f"Erro: {e}"
 
 # =============================================================================
-# DECORADORES DE AUTENTICAÇÃO
+# DECORADORES
 # =============================================================================
 
 def login_required(f):
@@ -242,7 +230,6 @@ def login():
         if not login or not senha:
             return render_template('login.html', erro="Preencha todos os campos.")
         try:
-            # Verifica se é admin (aba Equipes)
             ws_equipes = get_worksheet("Equipes")
             equipes = ws_equipes.get_all_records()
             admin = next((eq for eq in equipes if eq.get("login_admin") == login), None)
@@ -253,7 +240,6 @@ def login():
                 session['nome'] = admin['nome']
                 session['login'] = login
                 return redirect(url_for('admin_panel'))
-            # Verifica se é usuário comum (aba Usuarios)
             ws_usuarios = get_worksheet("Usuarios")
             usuarios = ws_usuarios.get_all_records()
             user = next((u for u in usuarios if u.get("login") == login), None)
@@ -290,7 +276,150 @@ def admin_panel():
     return render_template('admin.html', equipe=session.get('equipe_id'))
 
 # =============================================================================
-# API: TESTE DE CONEXÃO
+# ROTA PDF
+# =============================================================================
+
+@app.route('/api/admin/relatorio-pdf')
+@admin_required
+def relatorio_pdf():
+    equipe_id = session.get('equipe_id')
+    nome_equipe = session.get('nome', f"Equipe {equipe_id}")
+    data_geracao = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+    usuarios = get_cache("usuarios")
+    ferias = get_cache("ferias")
+    membros = [u for u in usuarios if u.get('equipe_id') == equipe_id]
+
+    dados_membros = []
+    for membro in membros:
+        reservas = [r for r in ferias if str(r.get('usuario_id')) == str(membro['id'])]
+        reservas.sort(key=lambda x: datetime.strptime(x['data_inicio'], "%d/%m/%Y"))
+        total_dias = sum([int(r.get('dias_uteis', 0)) for r in reservas])
+        dados_membros.append({
+            "nome": membro['nome'],
+            "nivel": membro['nivel'],
+            "reservas": reservas,
+            "total_dias": total_dias
+        })
+    dados_membros.sort(key=lambda x: x['nivel'])
+
+    def gerar_bloco_membro(m):
+        if not m['reservas']:
+            return f"""
+            <div class="membro">
+                <div class="membro-nome">
+                    {m['nome']}
+                    <span class="nivel">Nível {m['nivel']}</span>
+                </div>
+                <div class="sem-reservas">Nenhuma reserva de férias registrada.</div>
+            </div>
+            """
+        tabela = """
+            <table>
+                <thead>
+                    <tr><th>Período</th><th>Dias úteis</th><th>Status</th></tr>
+                </thead>
+                <tbody>
+        """
+        for r in m['reservas']:
+            tabela += f"""
+                <tr>
+                    <td>{r['data_inicio']} a {r['data_fim']}</td>
+                    <td>{r['dias_uteis']}</td>
+                    <td>{r['status']}</td>
+                </tr>
+            """
+        tabela += """
+                </tbody>
+            </table>
+        """
+        return f"""
+        <div class="membro">
+            <div class="membro-nome">
+                {m['nome']}
+                <span class="nivel">Nível {m['nivel']} – Total: {m['total_dias']}/25 dias</span>
+            </div>
+            {tabela}
+            <div class="total-dias">Total de dias: {m['total_dias']}</div>
+        </div>
+        """
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            @page {{
+                size: A4 portrait;
+                margin: 2cm 1.5cm 2cm 1.5cm;
+                @bottom-center {{
+                    content: "Página " counter(page) " de " counter(pages);
+                    font-size: 9pt;
+                    color: #666;
+                }}
+            }}
+            body {{ font-family: 'Helvetica', 'Arial', sans-serif; font-size: 11pt; line-height: 1.5; color: #222; }}
+            .header {{ text-align: center; border-bottom: 3px solid #003366; padding-bottom: 15px; margin-bottom: 20px; }}
+            .header h1 {{ font-size: 22pt; margin: 0; color: #003366; letter-spacing: 2px; }}
+            .header h2 {{ font-size: 14pt; margin: 5px 0 0 0; font-weight: normal; color: #555; }}
+            .header .sub {{ font-size: 12pt; margin-top: 5px; color: #666; }}
+            .info-equipe {{ display: flex; justify-content: space-between; background: #f5f7fa; padding: 10px 15px; border-radius: 5px; margin-bottom: 25px; font-size: 10pt; }}
+            .info-equipe span {{ font-weight: bold; }}
+            .membro {{ margin-bottom: 25px; page-break-inside: avoid; }}
+            .membro-nome {{ font-size: 13pt; font-weight: bold; color: #003366; border-bottom: 1px solid #ccc; padding-bottom: 3px; margin-bottom: 8px; display: flex; justify-content: space-between; }}
+            .membro-nome .nivel {{ font-weight: normal; font-size: 10pt; color: #666; }}
+            table {{ width: 100%; border-collapse: collapse; font-size: 10pt; }}
+            table th {{ background-color: #e9ecef; text-align: left; padding: 6px 8px; border-bottom: 2px solid #003366; }}
+            table td {{ padding: 5px 8px; border-bottom: 1px solid #ddd; }}
+            table tr:last-child td {{ border-bottom: none; }}
+            .total-dias {{ text-align: right; font-weight: bold; margin-top: 5px; font-size: 10pt; }}
+            .footer {{ margin-top: 30px; border-top: 1px solid #ccc; padding-top: 15px; font-size: 9pt; color: #666; text-align: center; }}
+            .assinatura {{ margin-top: 30px; display: flex; justify-content: space-between; font-size: 10pt; }}
+            .assinatura .campo {{ text-align: center; }}
+            .assinatura .campo .label {{ font-size: 9pt; color: #555; }}
+            .sem-reservas {{ color: #999; font-style: italic; padding: 5px 0; }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>POLÍCIA PENAL DE MINAS GERAIS</h1>
+            <h2>Relatório de Férias – {nome_equipe}</h2>
+            <div class="sub">Gerado em: {data_geracao}</div>
+        </div>
+        <div class="info-equipe">
+            <div><span>Equipe:</span> {nome_equipe}</div>
+            <div><span>Total de membros:</span> {len(membros)}</div>
+            <div><span>Período de referência:</span> {datetime.now().year}</div>
+        </div>
+        {''.join([gerar_bloco_membro(m) for m in dados_membros])}
+        <div class="assinatura">
+            <div class="campo"><div>___________________________</div><div class="label">Assinatura do Líder da Equipe</div></div>
+            <div class="campo"><div>___________________________</div><div class="label">Assinatura do Diretor</div></div>
+        </div>
+        <div class="footer">Relatório gerado automaticamente pelo Sistema de Gestão de Férias - {data_geracao}</div>
+    </body>
+    </html>
+    """
+
+    try:
+        font_config = FontConfiguration()
+        pdf = HTML(string=html_content).write_pdf(
+            font_config=font_config,
+            stylesheets=[CSS(string='@page { size: A4; margin: 2cm; }')]
+        )
+        return send_file(
+            io.BytesIO(pdf),
+            download_name=f'ferias_{nome_equipe}_{datetime.now().strftime("%Y%m%d_%H%M")}.pdf',
+            as_attachment=True,
+            mimetype='application/pdf'
+        )
+    except Exception as e:
+        return jsonify({"error": f"Erro ao gerar PDF: {str(e)}"}), 500
+
+# =============================================================================
+# API TESTE, FERIADOS, CALENDÁRIO, RESERVAS, ADMIN (já existentes)
+# Mantenha todas as rotas que você já tinha.
 # =============================================================================
 
 @app.route('/test-sheet')
@@ -301,18 +430,10 @@ def test_sheet():
     except Exception as e:
         return jsonify({"status": "erro", "mensagem": str(e)}), 500
 
-# =============================================================================
-# API: FERIADOS
-# =============================================================================
-
 @app.route('/api/feriados')
 def api_feriados():
     config = ler_config()
     return jsonify(config['feriados'])
-
-# =============================================================================
-# API: CALENDÁRIO
-# =============================================================================
 
 @app.route('/api/calendario')
 @login_required
@@ -328,7 +449,6 @@ def api_calendario():
         ultimo_dia = datetime(ano, mes, 1) + timedelta(days=31)
         ultimo_dia = ultimo_dia.replace(day=1) - timedelta(days=1)
 
-        # Usa cache para ferias e usuarios
         ferias = get_cache("ferias")
         usuarios = get_cache("usuarios")
         membros_equipe = [u['id'] for u in usuarios if u.get('equipe_id') == equipe_id]
@@ -370,10 +490,6 @@ def api_calendario():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# =============================================================================
-# API: RESERVAS (GET, POST, DELETE)
-# =============================================================================
-
 @app.route('/api/reservas', methods=['GET', 'POST', 'DELETE'])
 @login_required
 def api_reservas():
@@ -399,7 +515,6 @@ def api_reservas():
         data_inicio = data['data_inicio']
         dias_uteis = int(data['dias_uteis'])
 
-        # Prioridade
         pode, msg = verificar_prioridade(user_id)
         if not pode:
             return jsonify({"error": msg}), 403
@@ -408,25 +523,21 @@ def api_reservas():
         feriados = config['feriados']
         data_fim = proximo_dia_util(data_inicio, dias_uteis, feriados)
 
-        # Verificar total de dias do usuário
         ferias = get_cache("ferias")
         total_atual = sum([int(r.get('dias_uteis', 0)) for r in ferias if str(r.get('usuario_id')) == str(user_id)])
         if total_atual + dias_uteis > 25:
             return jsonify({"error": f"Usuário já tem {total_atual} dias; limite 25."}), 400
 
-        # Obter equipe do usuário
         usuarios = get_cache("usuarios")
         user = next((u for u in usuarios if str(u['id']) == str(user_id)), None)
         if not user:
             return jsonify({"error": "Usuário não encontrado."}), 404
         equipe_id = user['equipe_id']
 
-        # Conflito de plantão
         pode, msg = verificar_conflito_plantao(equipe_id, data_inicio, data_fim, user_id)
         if not pode:
             return jsonify({"error": msg}), 409
 
-        # Inserir na planilha
         ws_ferias = get_worksheet("Ferias")
         ids = [int(r.get('id', 0)) for r in ferias]
         novo_id = max(ids) + 1 if ids else 1
@@ -442,7 +553,7 @@ def api_reservas():
             return jsonify({"error": "ID obrigatório."}), 400
         try:
             ws_ferias = get_worksheet("Ferias")
-            ferias = ws_ferias.get_all_records()  # leitura direta para encontrar linha
+            ferias = ws_ferias.get_all_records()
             idx = None
             for i, r in enumerate(ferias, start=2):
                 if str(r.get('id')) == str(reserva_id):
@@ -458,10 +569,6 @@ def api_reservas():
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
-# =============================================================================
-# API: ADMIN – USUÁRIOS
-# =============================================================================
-
 @app.route('/api/admin/usuarios', methods=['GET', 'POST', 'PUT'])
 @admin_required
 def admin_usuarios():
@@ -470,7 +577,6 @@ def admin_usuarios():
         try:
             usuarios = get_cache("usuarios")
             da_equipe = [u for u in usuarios if u.get('equipe_id') == equipe_id]
-            # Remove hashes para não expor
             for u in da_equipe:
                 u.pop('senha_hash', None)
             return jsonify(da_equipe)
@@ -526,10 +632,6 @@ def admin_usuarios():
             return jsonify({"success": True})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
-
-# =============================================================================
-# API: ADMIN – CONFIGURAÇÃO
-# =============================================================================
 
 @app.route('/api/admin/config', methods=['GET', 'POST'])
 @admin_required

@@ -31,8 +31,9 @@
         </ul>
         <div class="tab-content mt-3">
             <div class="tab-pane active" id="usuarios">
-                <div class="mb-2">
+                <div class="mb-2 d-flex gap-2">
                     <button class="btn btn-primary" id="btn-novo-usuario">+ Novo Usuário</button>
+                    <button class="btn btn-success" id="btn-gerar-pdf">📄 Gerar Relatório PDF</button>
                 </div>
                 <table class="table table-bordered table-hover">
                     <thead>
@@ -118,7 +119,6 @@
             }
             carregarUsuarios();
 
-            // Novo usuário
             $('#btn-novo-usuario').click(function() {
                 $('#modalUsuarioLabel').text('Novo Usuário');
                 $('#usuario-id').val('');
@@ -129,7 +129,6 @@
                 modalUsuario.show();
             });
 
-            // Editar usuário (delegação)
             $('#tabela-usuarios').on('click', '.btn-editar', function() {
                 const id = $(this).data('id');
                 const nome = $(this).data('nome');
@@ -144,7 +143,6 @@
                 modalUsuario.show();
             });
 
-            // Salvar (POST ou PUT)
             $('#btn-salvar-usuario').click(function() {
                 const id = $('#usuario-id').val();
                 const nome = $('#nome').val();
@@ -161,7 +159,6 @@
                 if (senha) data.senha = senha;
 
                 if (id) {
-                    // Editar
                     data.id = id;
                     $.ajax({
                         url: '/api/admin/usuarios',
@@ -181,8 +178,7 @@
                         }
                     });
                 } else {
-                    // Criar
-                    data.senha = senha || '123'; // senha padrão
+                    data.senha = senha || '123';
                     $.ajax({
                         url: '/api/admin/usuarios',
                         method: 'POST',
@@ -203,7 +199,6 @@
                 }
             });
 
-            // Configuração do ano
             $('#form-config').submit(function(e) {
                 e.preventDefault();
                 const ano = $('#ano').val();
@@ -224,6 +219,15 @@
                         $('#msg-config').html('<div class="alert alert-danger">Erro: ' + err.responseJSON.error + '</div>');
                     }
                 });
+            });
+
+            $('#btn-gerar-pdf').click(function() {
+                const link = document.createElement('a');
+                link.href = '/api/admin/relatorio-pdf';
+                link.target = '_blank';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
             });
         });
     </script>
