@@ -34,8 +34,14 @@
             <li class="nav-item" role="presentation">
                 <button class="nav-link" id="config-tab" data-bs-toggle="tab" data-bs-target="#config" type="button">Configuração</button>
             </li>
+            {% if global_admin %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="equipes-tab" data-bs-toggle="tab" data-bs-target="#equipes" type="button">Administradores</button>
+            </li>
+            {% endif %}
         </ul>
         <div class="tab-content mt-3">
+            <!-- Aba Usuários (existente) -->
             <div class="tab-pane active" id="usuarios">
                 <div class="mb-2 d-flex gap-2 flex-wrap">
                     <button class="btn btn-primary" id="btn-novo-usuario">+ Novo Usuário</button>
@@ -60,6 +66,8 @@
                     <tbody id="tabela-usuarios"></tbody>
                 </table>
             </div>
+
+            <!-- Aba Configuração (existente) -->
             <div class="tab-pane" id="config">
                 <h4>Configuração do ano</h4>
                 <form id="form-config">
@@ -72,10 +80,30 @@
                 </form>
                 <p class="mt-3">Feriados serão carregados automaticamente com base no ano informado.</p>
             </div>
+
+            <!-- Nova Aba: Administradores de Equipe (apenas global_admin) -->
+            {% if global_admin %}
+            <div class="tab-pane" id="equipes">
+                <div class="mb-2">
+                    <button class="btn btn-primary" id="btn-nova-equipe">+ Nova Equipe / Admin</button>
+                </div>
+                <table class="table table-bordered table-hover">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Nome</th>
+                            <th>Login Admin</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tabela-equipes"></tbody>
+                </table>
+            </div>
+            {% endif %}
         </div>
     </div>
 
-    <!-- Modal para criar/editar usuário -->
+    <!-- Modal para criar/editar usuário comum -->
     <div class="modal fade" id="modalUsuario" tabindex="-1">
         <div class="modal-dialog">
             <div class="modal-content">
@@ -123,13 +151,52 @@
         </div>
     </div>
 
+    <!-- Modal para criar/editar administrador de equipe -->
+    <div class="modal fade" id="modalEquipe" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="modalEquipeLabel">Nova Equipe / Admin</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="form-equipe">
+                        <input type="hidden" id="equipe-id" value="">
+                        <div class="mb-3">
+                            <label for="nome-equipe" class="form-label">Nome da Equipe</label>
+                            <input type="text" class="form-control" id="nome-equipe" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="login-admin" class="form-label">Login do Administrador</label>
+                            <input type="text" class="form-control" id="login-admin" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="senha-admin" class="form-label">Senha do Administrador</label>
+                            <input type="password" class="form-control" id="senha-admin" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="cor-equipe" class="form-label">Cor (opcional)</label>
+                            <input type="color" class="form-control" id="cor-equipe" value="#FFB6C1">
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-primary" id="btn-salvar-equipe">Salvar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         $(function() {
             const modalUsuario = new bootstrap.Modal(document.getElementById('modalUsuario'));
+            const modalEquipe = new bootstrap.Modal(document.getElementById('modalEquipe'));
             const globalAdmin = JSON.parse('{{ global_admin | tojson | safe }}');
 
+            // =================== USUÁRIOS COMUNS ===================
             function carregarUsuarios() {
                 $.get('/api/admin/usuarios', function(usuarios) {
                     let html = '';
@@ -158,7 +225,6 @@
             }
             carregarUsuarios();
 
-            // Novo usuário
             $('#btn-novo-usuario').click(function() {
                 $('#modalUsuarioLabel').text('Novo Usuário');
                 $('#usuario-id').val('');
@@ -170,7 +236,6 @@
                 modalUsuario.show();
             });
 
-            // Editar usuário (delegação)
             $('#tabela-usuarios').on('click', '.btn-editar', function() {
                 const id = $(this).data('id');
                 const nome = $(this).data('nome');
@@ -187,7 +252,6 @@
                 modalUsuario.show();
             });
 
-            // Excluir usuário
             $('#tabela-usuarios').on('click', '.btn-excluir', function() {
                 const id = $(this).data('id');
                 if (!confirm('Tem certeza que deseja excluir este usuário?')) return;
@@ -207,7 +271,6 @@
                 });
             });
 
-            // Salvar (POST ou PUT)
             $('#btn-salvar-usuario').click(function() {
                 const id = $('#usuario-id').val();
                 const nome = $('#nome').val();
@@ -265,7 +328,115 @@
                 }
             });
 
-            // Configuração do ano
+            // =================== ADMINISTRADORES DE EQUIPE (apenas global_admin) ===================
+            if (globalAdmin) {
+                function carregarEquipes() {
+                    $.get('/api/admin/equipes', function(equipes) {
+                        let html = '';
+                        equipes.forEach(e => {
+                            html += `<tr>
+                                        <td>${e.id}</td>
+                                        <td>${e.nome}</td>
+                                        <td>${e.login_admin}</td>
+                                        <td>
+                                            <button class="btn btn-sm btn-warning btn-editar-equipe" 
+                                                data-id="${e.id}" 
+                                                data-nome="${e.nome}" 
+                                                data-login="${e.login_admin}"
+                                                data-cor="${e.cor || '#FFB6C1'}">Editar</button>
+                                            <button class="btn btn-sm btn-danger btn-excluir-equipe" data-id="${e.id}">Excluir</button>
+                                        </td>
+                                    </tr>`;
+                        });
+                        $('#tabela-equipes').html(html);
+                    });
+                }
+                carregarEquipes();
+
+                $('#btn-nova-equipe').click(function() {
+                    $('#modalEquipeLabel').text('Nova Equipe / Admin');
+                    $('#equipe-id').val('');
+                    $('#nome-equipe').val('');
+                    $('#login-admin').val('');
+                    $('#senha-admin').val('');
+                    $('#cor-equipe').val('#FFB6C1');
+                    modalEquipe.show();
+                });
+
+                $('#tabela-equipes').on('click', '.btn-editar-equipe', function() {
+                    const id = $(this).data('id');
+                    const nome = $(this).data('nome');
+                    const login = $(this).data('login');
+                    const cor = $(this).data('cor');
+                    $('#modalEquipeLabel').text('Editar Administrador');
+                    $('#equipe-id').val(id);
+                    $('#nome-equipe').val(nome);
+                    $('#login-admin').val(login);
+                    $('#senha-admin').val('');
+                    $('#cor-equipe').val(cor || '#FFB6C1');
+                    modalEquipe.show();
+                });
+
+                $('#tabela-equipes').on('click', '.btn-excluir-equipe', function() {
+                    const id = $(this).data('id');
+                    if (!confirm('Tem certeza que deseja excluir esta equipe e seu administrador?')) return;
+                    $.ajax({
+                        url: '/api/admin/equipes?id=' + id,
+                        method: 'DELETE',
+                        success: function(res) {
+                            if (res.success) {
+                                carregarEquipes();
+                            } else {
+                                alert('Erro: ' + res.error);
+                            }
+                        },
+                        error: function(err) {
+                            alert('Erro: ' + err.responseJSON.error);
+                        }
+                    });
+                });
+
+                $('#btn-salvar-equipe').click(function() {
+                    const id = $('#equipe-id').val();
+                    const nome = $('#nome-equipe').val();
+                    const login = $('#login-admin').val();
+                    const senha = $('#senha-admin').val();
+                    const cor = $('#cor-equipe').val();
+
+                    if (!nome || !login) {
+                        alert('Preencha o nome e login do administrador.');
+                        return;
+                    }
+
+                    if (id) {
+                        // Edição
+                        const data = { id: parseInt(id), nome, login_admin: login, cor };
+                        if (senha) data.senha_admin = senha;
+                        $.ajax({
+                            url: '/api/admin/equipes',
+                            method: 'PUT',
+                            contentType: 'application/json',
+                            data: JSON.stringify(data),
+                            success: function(res) {
+                                if (res.success) {
+                                    carregarEquipes();
+                                    modalEquipe.hide();
+                                } else {
+                                    alert('Erro: ' + res.error);
+                                }
+                            },
+                            error: function(err) {
+                                alert('Erro: ' + err.responseJSON.error);
+                            }
+                        });
+                    } else {
+                        // Criação de nova equipe (não implementado via API, mas pode ser feito manualmente na planilha)
+                        alert('Para criar uma nova equipe, adicione manualmente na planilha ou entre em contato com o desenvolvedor.');
+                    }
+                });
+            }
+
+            // =================== CONFIGURAÇÃO ===================
             $('#form-config').submit(function(e) {
                 e.preventDefault();
                 const ano = $('#ano').val();
@@ -288,7 +459,7 @@
                 });
             });
 
-            // Gerar PDF (equipe atual)
+            // =================== PDF ===================
             $('#btn-gerar-pdf').click(function() {
                 const link = document.createElement('a');
                 link.href = '/api/admin/relatorio-pdf';
@@ -298,23 +469,23 @@
                 document.body.removeChild(link);
             });
 
-            // Gerar PDF para todas as equipes (apenas global_admin)
-            /* {% if global_admin %} */
-            $('#btn-gerar-pdf-todas').click(function() {
-                const equipes = [1, 2, 3, 4];
-                equipes.forEach(eq => {
-                    setTimeout(() => {
-                        const link = document.createElement('a');
-                        link.href = '/api/admin/relatorio-pdf?equipe_id=' + eq;
-                        link.target = '_blank';
-                        document.body.appendChild(link);
-                        link.click();
-                        document.body.removeChild(link);
-                    }, 1000 * (eq - 1)); // 1 segundo de intervalo para não sobrecarregar
+            const canGenerateAllPDFs = "{{ 'true' if global_admin else 'false' }}" === "true";
+            if (canGenerateAllPDFs) {
+                $('#btn-gerar-pdf-todas').click(function() {
+                    const equipes = [1, 2, 3, 4];
+                    equipes.forEach(eq => {
+                        setTimeout(() => {
+                            const link = document.createElement('a');
+                            link.href = '/api/admin/relatorio-pdf?equipe_id=' + eq;
+                            link.target = '_blank';
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
+                        }, 1000 * (eq - 1));
+                    });
+                    alert('Gerando PDFs para todas as equipes. Verifique os downloads.');
                 });
-                alert('Gerando PDFs para todas as equipes. Verifique os downloads.');
-            });
-            /* {% endif %} */
+            }
         });
     </script>
 </body>

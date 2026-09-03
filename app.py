@@ -463,7 +463,87 @@ def relatorio_pdf():
         return jsonify({"error": f"Erro ao gerar PDF: {str(e)}"}), 500
 
 # =============================================================================
-# API TESTE, FERIADOS, CALENDÁRIO, RESERVAS
+# API ADMIN – GERENCIAR ADMINISTRADORES DE EQUIPE (apenas global_admin)
+# =============================================================================
+
+@app.route('/api/admin/equipes', methods=['GET', 'PUT', 'DELETE'])
+@global_admin_required
+def admin_equipes():
+    if request.method == 'GET':
+        try:
+            ws_equipes = get_worksheet("Equipes")
+            equipes = ws_equipes.get_all_records()
+            # Remove a senha_hash para não expor
+            for eq in equipes:
+                eq.pop('senha_admin', None)
+            return jsonify(equipes)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    elif request.method == 'PUT':
+        data = request.json
+        equipe_id = data.get('id')
+        if not equipe_id:
+            return jsonify({"error": "ID da equipe obrigatório."}), 400
+
+        try:
+            ws_equipes = get_worksheet("Equipes")
+            equipes = ws_equipes.get_all_records()
+            idx = None
+            for i, eq in enumerate(equipes, start=2):
+                if str(eq.get('id')) == str(equipe_id):
+                    idx = i
+                    break
+            if idx is None:
+                return jsonify({"error": "Equipe não encontrada."}), 404
+
+            header = list(equipes[0].keys())
+            # Atualiza login_admin se enviado
+            if 'login_admin' in data:
+                coluna = header.index('login_admin') + 1
+                ws_equipes.update_cell(idx, coluna, data['login_admin'])
+            # Atualiza senha_admin se enviada
+            if 'senha_admin' in data and data['senha_admin']:
+                nova_hash = generate_password_hash(data['senha_admin'])
+                coluna = header.index('senha_admin') + 1
+                ws_equipes.update_cell(idx, coluna, nova_hash)
+            # Atualiza nome e cor se enviados
+            if 'nome' in data:
+                coluna = header.index('nome') + 1
+                ws_equipes.update_cell(idx, coluna, data['nome'])
+            if 'cor' in data:
+                coluna = header.index('cor') + 1
+                ws_equipes.update_cell(idx, coluna, data['cor'])
+
+            invalidate_cache("equipes")
+            return jsonify({"success": True})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    elif request.method == 'DELETE':
+        equipe_id = request.args.get('id')
+        if not equipe_id:
+            return jsonify({"error": "ID da equipe obrigatório."}), 400
+        try:
+            ws_equipes = get_worksheet("Equipes")
+            equipes = ws_equipes.get_all_records()
+            idx = None
+            for i, eq in enumerate(equipes, start=2):
+                if str(eq.get('id')) == str(equipe_id):
+                    idx = i
+                    break
+            if idx is None:
+                return jsonify({"error": "Equipe não encontrada."}), 404
+
+            # Remove a linha
+            ws_equipes.delete_rows(idx)
+            invalidate_cache("equipes")
+            return jsonify({"success": True})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+# =============================================================================
+# API TESTE, FERIADOS, CALENDÁRIO, RESERVAS, USUÁRIOS
 # =============================================================================
 
 @app.route('/test-sheet')
