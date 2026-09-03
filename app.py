@@ -218,6 +218,14 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated
 
+def global_admin_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if 'user_id' not in session or not session.get('global_admin'):
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated
+
 # =============================================================================
 # ROTAS DE AUTENTICAÇÃO
 # =============================================================================
@@ -230,27 +238,40 @@ def login():
         if not login or not senha:
             return render_template('login.html', erro="Preencha todos os campos.")
         try:
+            # Verifica se é admin de equipe (aba Equipes)
             ws_equipes = get_worksheet("Equipes")
             equipes = ws_equipes.get_all_records()
             admin = next((eq for eq in equipes if eq.get("login_admin") == login), None)
             if admin and check_password_hash(admin.get("senha_admin"), senha):
                 session['user_id'] = f"admin_{admin['id']}"
                 session['is_admin'] = True
+                session['global_admin'] = False
                 session['equipe_id'] = admin['id']
                 session['nome'] = admin['nome']
                 session['login'] = login
                 return redirect(url_for('admin_panel'))
+
+            # Verifica se é usuário comum (aba Usuarios)
             ws_usuarios = get_worksheet("Usuarios")
             usuarios = ws_usuarios.get_all_records()
             user = next((u for u in usuarios if u.get("login") == login), None)
             if user and check_password_hash(user.get("senha_hash"), senha):
                 session['user_id'] = user['id']
-                session['is_admin'] = False
-                session['equipe_id'] = user['equipe_id']
-                session['nome'] = user['nome']
+                session['is_admin'] = user.get('admin') == 'TRUE' or user.get('admin') == True
+                session['global_admin'] = user.get('global_admin') == 'TRUE' or user.get('global_admin') == True
+                session['equipe_id'] = user.get('equipe_id', 0)
+                session['nome'] = user.get('nome', '')
                 session['login'] = login
-                session['nivel'] = user['nivel']
+                session['nivel'] = user.get('nivel', 0)
+                # Se for global_admin, redireciona para o painel admin com todas as equipes
+                if session['global_admin']:
+                    return redirect(url_for('admin_panel'))
+                # Se for admin de equipe (mas não global), redireciona para admin
+                if session['is_admin']:
+                    return redirect(url_for('admin_panel'))
+                # Usuário comum
                 return redirect(url_for('index'))
+
             return render_template('login.html', erro="Login ou senha inválidos.")
         except Exception as e:
             return render_template('login.html', erro=f"Erro: {e}")
@@ -268,12 +289,18 @@ def logout():
 @app.route('/')
 @login_required
 def index():
+    # Se for admin, redireciona para o painel
+    if session.get('is_admin'):
+        return redirect(url_for('admin_panel'))
     return render_template('index.html', usuario=session.get('nome'), is_admin=session.get('is_admin'))
 
 @app.route('/admin')
 @admin_required
 def admin_panel():
-    return render_template('admin.html', equipe=session.get('equipe_id'))
+    return render_template('admin.html', 
+                           equipe=session.get('equipe_id'), 
+                           global_admin=session.get('global_admin', False),
+                           nome=session.get('nome'))
 
 # =============================================================================
 # ROTA PDF
@@ -283,7 +310,25 @@ def admin_panel():
 @admin_required
 def relatorio_pdf():
     equipe_id = session.get('equipe_id')
-    nome_equipe = session.get('nome', f"Equipe {equipe_id}")
+    global_admin = session.get('global_admin', False)
+    
+    # Se for global_admin, pode escolher a equipe via query param, senão usa a própria
+    if global_admin:
+        equipe_id_param = request.args.get('equipe_id')
+        if equipe_id_param:
+            equipe_id = int(equipe_id_param)
+        # Se não especificou, usa a primeira equipe da lista
+        if not equipe_id:
+            equipes = get_cache("equipes")
+            if equipes:
+                equipe_id = equipes[0]['id']
+
+    if not equipe_id:
+        return jsonify({"error": "Equipe não especificada."}), 400
+
+    ws_equipes = get_worksheet("Equipes")
+    equipes = ws_equipes.get_all_records()
+    nome_equipe = next((e['nome'] for e in equipes if e['id'] == equipe_id), f"Equipe {equipe_id}")
     data_geracao = datetime.now().strftime("%d/%m/%Y %H:%M")
 
     usuarios = get_cache("usuarios")
@@ -418,8 +463,7 @@ def relatorio_pdf():
         return jsonify({"error": f"Erro ao gerar PDF: {str(e)}"}), 500
 
 # =============================================================================
-# API TESTE, FERIADOS, CALENDÁRIO, RESERVAS, ADMIN (já existentes)
-# Mantenha todas as rotas que você já tinha.
+# API TESTE, FERIADOS, CALENDÁRIO, RESERVAS
 # =============================================================================
 
 @app.route('/test-sheet')
@@ -494,7 +538,7 @@ def api_calendario():
 @login_required
 def api_reservas():
     usuario_id = session.get('user_id')
-    if session.get('is_admin'):
+    if session.get('is_admin') or session.get('global_admin'):
         usuario_id = request.args.get('usuario_id', usuario_id)
 
     if request.method == 'GET':
@@ -561,22 +605,34 @@ def api_reservas():
                     break
             if idx is None:
                 return jsonify({"error": "Reserva não encontrada."}), 404
-            if not session.get('is_admin') and str(ferias[idx-2].get('usuario_id')) != str(session.get('user_id')):
-                return jsonify({"error": "Permissão negada."}), 403
+            if not session.get('is_admin') and not session.get('global_admin'):
+                if str(ferias[idx-2].get('usuario_id')) != str(session.get('user_id')):
+                    return jsonify({"error": "Permissão negada."}), 403
             ws_ferias.delete_rows(idx)
             invalidate_cache("ferias")
             return jsonify({"success": True})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
-@app.route('/api/admin/usuarios', methods=['GET', 'POST', 'PUT'])
+# =============================================================================
+# API ADMIN – USUÁRIOS (com suporte a global_admin)
+# =============================================================================
+
+@app.route('/api/admin/usuarios', methods=['GET', 'POST', 'PUT', 'DELETE'])
 @admin_required
 def admin_usuarios():
     equipe_id = session.get('equipe_id')
+    global_admin = session.get('global_admin', False)
+
     if request.method == 'GET':
         try:
             usuarios = get_cache("usuarios")
-            da_equipe = [u for u in usuarios if u.get('equipe_id') == equipe_id]
+            if global_admin:
+                # Retorna todos os usuários
+                da_equipe = usuarios
+            else:
+                # Apenas da equipe do admin
+                da_equipe = [u for u in usuarios if u.get('equipe_id') == equipe_id]
             for u in da_equipe:
                 u.pop('senha_hash', None)
             return jsonify(da_equipe)
@@ -594,9 +650,13 @@ def admin_usuarios():
             ids = [int(u.get('id', 0)) for u in usuarios]
             novo_id = max(ids) + 1 if ids else 1
             senha_hash = generate_password_hash(data['senha'])
+            # Se global_admin, pode escolher a equipe; senão, usa a própria
+            equipe_destino = data.get('equipe_id') if global_admin else equipe_id
+            if not equipe_destino:
+                return jsonify({"error": "Equipe não informada."}), 400
             ws_usuarios.append_row([
-                novo_id, data['nome'], equipe_id, data['nivel'],
-                data['login'], senha_hash, False
+                novo_id, data['nome'], equipe_destino, data['nivel'],
+                data['login'], senha_hash, False, False
             ])
             invalidate_cache("usuarios")
             return jsonify({"success": True, "id": novo_id})
@@ -618,7 +678,13 @@ def admin_usuarios():
                     break
             if idx is None:
                 return jsonify({"error": "Usuário não encontrado."}), 404
-            campos = ['nome', 'nivel', 'login']
+            # Se não for global_admin, só pode editar usuários da própria equipe
+            if not global_admin:
+                usuario_alvo = usuarios[idx-2]
+                if usuario_alvo.get('equipe_id') != equipe_id:
+                    return jsonify({"error": "Permissão negada."}), 403
+
+            campos = ['nome', 'nivel', 'login', 'equipe_id']
             header = list(usuarios[0].keys())
             for campo in campos:
                 if campo in data:
@@ -632,6 +698,39 @@ def admin_usuarios():
             return jsonify({"success": True})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
+
+    elif request.method == 'DELETE':
+        user_id = request.args.get('id')
+        if not user_id:
+            return jsonify({"error": "ID do usuário obrigatório."}), 400
+        try:
+            ws_usuarios = get_worksheet("Usuarios")
+            usuarios = ws_usuarios.get_all_records()
+            idx = None
+            for i, u in enumerate(usuarios, start=2):
+                if str(u.get('id')) == str(user_id):
+                    idx = i
+                    break
+            if idx is None:
+                return jsonify({"error": "Usuário não encontrado."}), 404
+            # Verifica permissão
+            if not global_admin:
+                usuario_alvo = usuarios[idx-2]
+                if usuario_alvo.get('equipe_id') != equipe_id:
+                    return jsonify({"error": "Permissão negada."}), 403
+            # Não pode excluir a si mesmo
+            if str(user_id) == str(session.get('user_id')):
+                return jsonify({"error": "Não é possível excluir o próprio usuário."}), 400
+            # Remove linha
+            ws_usuarios.delete_rows(idx)
+            invalidate_cache("usuarios")
+            return jsonify({"success": True})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+# =============================================================================
+# API ADMIN – CONFIGURAÇÃO
+# =============================================================================
 
 @app.route('/api/admin/config', methods=['GET', 'POST'])
 @admin_required

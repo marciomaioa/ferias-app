@@ -14,7 +14,13 @@
 <body>
     <div class="container">
         <div class="d-flex justify-content-between align-items-center mb-3">
-            <h1>👑 Admin - Equipe {{ equipe }}</h1>
+            <h1>👑 Admin - 
+                {% if global_admin %}
+                    <span class="text-success">Super Administrador ({{ nome }})</span>
+                {% else %}
+                    Equipe {{ equipe }}
+                {% endif %}
+            </h1>
             <div>
                 <a href="/" class="btn btn-secondary me-2">Voltar</a>
                 <a href="/logout" class="btn btn-danger">Sair</a>
@@ -31,13 +37,25 @@
         </ul>
         <div class="tab-content mt-3">
             <div class="tab-pane active" id="usuarios">
-                <div class="mb-2 d-flex gap-2">
+                <div class="mb-2 d-flex gap-2 flex-wrap">
                     <button class="btn btn-primary" id="btn-novo-usuario">+ Novo Usuário</button>
                     <button class="btn btn-success" id="btn-gerar-pdf">📄 Gerar Relatório PDF</button>
+                    {% if global_admin %}
+                        <button class="btn btn-info" id="btn-gerar-pdf-todas">📄 PDF Todas Equipes</button>
+                    {% endif %}
                 </div>
                 <table class="table table-bordered table-hover">
                     <thead>
-                        <tr><th>ID</th><th>Nome</th><th>Nível</th><th>Login</th><th>Ações</th></tr>
+                        <tr>
+                            <th>ID</th>
+                            <th>Nome</th>
+                            <th>Nível</th>
+                            <th>Login</th>
+                            {% if global_admin %}
+                                <th>Equipe</th>
+                            {% endif %}
+                            <th>Ações</th>
+                        </tr>
                     </thead>
                     <tbody id="tabela-usuarios"></tbody>
                 </table>
@@ -84,6 +102,17 @@
                             <label for="senha" class="form-label">Senha (deixe em branco para manter)</label>
                             <input type="password" class="form-control" id="senha">
                         </div>
+                        {% if global_admin %}
+                        <div class="mb-3">
+                            <label for="equipe" class="form-label">Equipe</label>
+                            <select class="form-control" id="equipe">
+                                <option value="1">Equipe 1</option>
+                                <option value="2">Equipe 2</option>
+                                <option value="3">Equipe 3</option>
+                                <option value="4">Equipe 4</option>
+                            </select>
+                        </div>
+                        {% endif %}
                     </form>
                 </div>
                 <div class="modal-footer">
@@ -99,6 +128,7 @@
     <script>
         $(function() {
             const modalUsuario = new bootstrap.Modal(document.getElementById('modalUsuario'));
+            const globalAdmin = {{ global_admin|lower }};
 
             function carregarUsuarios() {
                 $.get('/api/admin/usuarios', function(usuarios) {
@@ -108,17 +138,27 @@
                                     <td>${u.id}</td>
                                     <td>${u.nome}</td>
                                     <td>${u.nivel}</td>
-                                    <td>${u.login}</td>
-                                    <td>
-                                        <button class="btn btn-sm btn-warning btn-editar" data-id="${u.id}" data-nome="${u.nome}" data-nivel="${u.nivel}" data-login="${u.login}">Editar</button>
-                                    </td>
-                                </tr>`;
+                                    <td>${u.login}</td>`;
+                        if (globalAdmin) {
+                            html += `<td>Equipe ${u.equipe_id}</td>`;
+                        }
+                        html += `<td>
+                                    <button class="btn btn-sm btn-warning btn-editar" 
+                                        data-id="${u.id}" 
+                                        data-nome="${u.nome}" 
+                                        data-nivel="${u.nivel}" 
+                                        data-login="${u.login}"
+                                        data-equipe="${u.equipe_id}">Editar</button>
+                                    <button class="btn btn-sm btn-danger btn-excluir" data-id="${u.id}">Excluir</button>
+                                </td>
+                            </tr>`;
                     });
                     $('#tabela-usuarios').html(html);
                 });
             }
             carregarUsuarios();
 
+            // Novo usuário
             $('#btn-novo-usuario').click(function() {
                 $('#modalUsuarioLabel').text('Novo Usuário');
                 $('#usuario-id').val('');
@@ -126,23 +166,48 @@
                 $('#nivel').val('');
                 $('#login').val('');
                 $('#senha').val('');
+                if (globalAdmin) $('#equipe').val(1);
                 modalUsuario.show();
             });
 
+            // Editar usuário (delegação)
             $('#tabela-usuarios').on('click', '.btn-editar', function() {
                 const id = $(this).data('id');
                 const nome = $(this).data('nome');
                 const nivel = $(this).data('nivel');
                 const login = $(this).data('login');
+                const equipe = $(this).data('equipe');
                 $('#modalUsuarioLabel').text('Editar Usuário');
                 $('#usuario-id').val(id);
                 $('#nome').val(nome);
                 $('#nivel').val(nivel);
                 $('#login').val(login);
                 $('#senha').val('');
+                if (globalAdmin) $('#equipe').val(equipe);
                 modalUsuario.show();
             });
 
+            // Excluir usuário
+            $('#tabela-usuarios').on('click', '.btn-excluir', function() {
+                const id = $(this).data('id');
+                if (!confirm('Tem certeza que deseja excluir este usuário?')) return;
+                $.ajax({
+                    url: '/api/admin/usuarios?id=' + id,
+                    method: 'DELETE',
+                    success: function(res) {
+                        if (res.success) {
+                            carregarUsuarios();
+                        } else {
+                            alert('Erro: ' + res.error);
+                        }
+                    },
+                    error: function(err) {
+                        alert('Erro: ' + err.responseJSON.error);
+                    }
+                });
+            });
+
+            // Salvar (POST ou PUT)
             $('#btn-salvar-usuario').click(function() {
                 const id = $('#usuario-id').val();
                 const nome = $('#nome').val();
@@ -157,6 +222,7 @@
 
                 const data = { nome, nivel, login };
                 if (senha) data.senha = senha;
+                if (globalAdmin) data.equipe_id = parseInt($('#equipe').val());
 
                 if (id) {
                     data.id = id;
@@ -199,6 +265,7 @@
                 }
             });
 
+            // Configuração do ano
             $('#form-config').submit(function(e) {
                 e.preventDefault();
                 const ano = $('#ano').val();
@@ -221,6 +288,7 @@
                 });
             });
 
+            // Gerar PDF (equipe atual)
             $('#btn-gerar-pdf').click(function() {
                 const link = document.createElement('a');
                 link.href = '/api/admin/relatorio-pdf';
@@ -229,6 +297,24 @@
                 link.click();
                 document.body.removeChild(link);
             });
+
+            // Gerar PDF para todas as equipes (apenas global_admin)
+            {% if global_admin %}
+            $('#btn-gerar-pdf-todas').click(function() {
+                const equipes = [1, 2, 3, 4];
+                equipes.forEach(eq => {
+                    setTimeout(() => {
+                        const link = document.createElement('a');
+                        link.href = '/api/admin/relatorio-pdf?equipe_id=' + eq;
+                        link.target = '_blank';
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                    }, 1000 * (eq - 1)); // 1 segundo de intervalo para não sobrecarregar
+                });
+                alert('Gerando PDFs para todas as equipes. Verifique os downloads.');
+            });
+            {% endif %}
         });
     </script>
 </body>
