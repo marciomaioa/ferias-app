@@ -6,55 +6,123 @@
     <title>Calendário de Férias</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { padding-top: 20px; background: #f4f6f9; }
-        .calendario { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
-        .dia { padding: 10px; border-radius: 5px; background: white; border: 1px solid #ddd; text-align: center; min-height: 60px; }
-        .equipe1 { background-color: #FFB6C1; }  /* rosa claro */
-        .equipe2 { background-color: #90EE90; }  /* verde claro */
-        .equipe3 { background-color: #ADD8E6; }  /* azul claro */
-        .equipe4 { background-color: #FFFFE0; }  /* amarelo claro */
+        body { background: #f0f2f5; padding: 20px; }
+        .calendario { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; max-width: 700px; margin: 0 auto; }
+        .dia { padding: 8px 4px; border-radius: 6px; background: white; border: 1px solid #ddd; text-align: center; font-size: 0.9rem; min-height: 65px; position: relative; transition: 0.2s; cursor: default; }
+        .dia .data { font-weight: bold; }
+        .dia .reserva-label { font-size: 0.6rem; background: rgba(0,0,0,0.1); border-radius: 3px; padding: 1px 3px; margin-top: 2px; display: block; }
+        .equipe1 { background-color: #FFB6C1; } /* rosa claro */
+        .equipe2 { background-color: #90EE90; } /* verde claro */
+        .equipe3 { background-color: #ADD8E6; } /* azul claro */
+        .equipe4 { background-color: #FFFFE0; } /* amarelo claro */
         .feriado { background-color: #ffcccc; }
-        .reservado { border: 2px solid red; }
-        .legenda { display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 15px; }
-        .legenda span { display: inline-block; width: 20px; height: 20px; border-radius: 3px; }
+        .reservado { border: 2px solid #dc3545; }
+        .selecionavel { cursor: pointer; }
+        .selecionavel:hover { transform: scale(1.02); box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
+        .legenda { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 20px; justify-content: center; }
+        .legenda-item { display: flex; align-items: center; gap: 5px; }
+        .legenda-cor { width: 20px; height: 20px; border-radius: 4px; border: 1px solid #ccc; }
+        .cabecalho-mes { display: flex; justify-content: space-between; align-items: center; max-width: 700px; margin: 0 auto 15px; }
+        .btn-mes { background: #6c757d; color: white; border: none; padding: 5px 15px; border-radius: 5px; }
+        .btn-mes:hover { background: #5a6268; }
+        .modal-body .resumo { background: #f8f9fa; padding: 10px; border-radius: 5px; }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="d-flex justify-content-between align-items-center mb-3">
-            <h1>📅 Calendário de Férias - {{ usuario }}</h1>
-            <a href="/logout" class="btn btn-danger">Sair</a>
+            <h2>📅 Férias - {{ usuario }}</h2>
+            <div>
+                {% if is_admin %}
+                    <a href="/admin" class="btn btn-warning me-2">Admin</a>
+                {% endif %}
+                <a href="/logout" class="btn btn-danger">Sair</a>
+            </div>
         </div>
 
+        <!-- Legenda -->
         <div class="legenda">
-            <div><span class="equipe1"></span> Equipe 1</div>
-            <div><span class="equipe2"></span> Equipe 2</div>
-            <div><span class="equipe3"></span> Equipe 3</div>
-            <div><span class="equipe4"></span> Equipe 4</div>
+            <div class="legenda-item"><span class="legenda-cor equipe1"></span> Equipe 1</div>
+            <div class="legenda-item"><span class="legenda-cor equipe2"></span> Equipe 2</div>
+            <div class="legenda-item"><span class="legenda-cor equipe3"></span> Equipe 3</div>
+            <div class="legenda-item"><span class="legenda-cor equipe4"></span> Equipe 4</div>
+            <div class="legenda-item"><span class="legenda-cor feriado"></span> Feriado</div>
+            <div class="legenda-item"><span class="legenda-cor" style="border-color: red; border-width: 2px;"></span> Reservado</div>
         </div>
 
-        <div id="calendario" class="calendario">
-            <!-- carregado via JS -->
+        <!-- Navegação do mês -->
+        <div class="cabecalho-mes">
+            <button class="btn-mes" id="mes-anterior">◀</button>
+            <h4 id="mes-titulo" class="mb-0"></h4>
+            <button class="btn-mes" id="mes-proximo">▶</button>
         </div>
 
-        <div class="mt-4">
-            <h4>Minhas reservas</h4>
+        <!-- Grid do calendário -->
+        <div id="calendario" class="calendario"></div>
+
+        <!-- Minhas reservas -->
+        <div class="mt-4" style="max-width:700px; margin:20px auto;">
+            <h5>Minhas reservas</h5>
             <ul id="minhas-reservas" class="list-group"></ul>
+            <div class="mt-2">
+                <span id="total-dias">Total de dias reservados: 0</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal para selecionar férias -->
+    <div class="modal fade" id="modalReserva" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Solicitar férias</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p><strong>Data de início selecionada:</strong> <span id="data-inicio-selecionada"></span></p>
+                    <div class="mb-3">
+                        <label for="dias-opcao" class="form-label">Quantos dias úteis?</label>
+                        <select id="dias-opcao" class="form-select">
+                            <option value="10">10 dias</option>
+                            <option value="15">15 dias</option>
+                            <option value="25">25 dias</option>
+                        </select>
+                    </div>
+                    <div class="resumo">
+                        <p><strong>Data de fim calculada:</strong> <span id="data-fim-preview"></span></p>
+                        <p><strong>Dias úteis totais:</strong> <span id="dias-uteis-preview"></span></p>
+                        <p id="conflito-msg" class="text-danger"></p>
+                        <p id="reservas-msg" class="text-info"></p>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-primary" id="btn-confirmar-reserva">Confirmar reserva</button>
+                </div>
+            </div>
         </div>
     </div>
 
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         $(function() {
+            let mesAtual = new Date().getMonth() + 1;
+            let anoAtual = new Date().getFullYear();
+            let dadosCalendario = null;
+            let dataSelecionada = null;
+
+            // Tooltips via Bootstrap
+            var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+            var tooltipList = tooltipTriggerList.map(function (el) { return new bootstrap.Tooltip(el); });
+
             function carregarCalendario(ano, mes) {
-                $.get('/api/calendario', {ano, mes}, function(data) {
-                    let html = '';
-                    // cabeçalho dias da semana
+                $.get('/api/calendario', {ano: ano, mes: mes}, function(data) {
+                    dadosCalendario = data;
                     const diasSemana = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
-                    html += diasSemana.map(d => `<div class="fw-bold">${d}</div>`).join('');
-                    
-                    // preencher dias
-                    const primeiro = new Date(data.ano, data.mes-1, 1).getDay();
+                    let html = diasSemana.map(d => `<div class="fw-bold text-center">${d}</div>`).join('');
+
+                    const primeiro = new Date(ano, mes-1, 1).getDay();
                     for (let i = 0; i < primeiro; i++) html += '<div></div>';
 
                     data.dias.forEach(dia => {
@@ -62,29 +130,170 @@
                         classes += ' equipe' + dia.equipe_plantao;
                         if (dia.feriado) classes += ' feriado';
                         if (dia.reservas && dia.reservas.length > 0) classes += ' reservado';
-                        
+
+                        // Se for selecionável (não feriado e não reservado por outro)
+                        let selecionavel = !dia.feriado;
+                        if (selecionavel) {
+                            classes += ' selecionavel';
+                        }
+
                         let tooltip = dia.data;
                         if (dia.reservas && dia.reservas.length > 0) {
-                            tooltip += '<br>Reservas: ' + dia.reservas.map(r => r.usuario).join(', ');
+                            tooltip += '\nReservas: ' + dia.reservas.map(r => r.usuario + ' ('+r.inicio+' a '+r.fim+')').join('; ');
                         }
-                        html += `<div class="${classes}" title="${tooltip}">${dia.data}</div>`;
+
+                        html += `<div class="${classes}" data-data="${dia.data}" data-reservas='${JSON.stringify(dia.reservas)}' title="${tooltip}" ${selecionavel ? 'onclick="abrirModal(\''+dia.data+'\')"' : ''}>
+                                    <div class="data">${dia.data.split('/')[0]}</div>
+                                    ${dia.reservas && dia.reservas.length > 0 ? '<span class="reserva-label">🔴</span>' : ''}
+                                </div>`;
                     });
                     $('#calendario').html(html);
+                    $('#mes-titulo').text(new Date(ano, mes-1).toLocaleString('pt-BR', {month:'long', year:'numeric'}));
                 });
             }
 
-            // carregar mês atual
-            const hoje = new Date();
-            carregarCalendario(hoje.getFullYear(), hoje.getMonth()+1);
+            window.abrirModal = function(data) {
+                dataSelecionada = data;
+                $('#data-inicio-selecionada').text(data);
+                $('#data-fim-preview').text('');
+                $('#dias-uteis-preview').text('');
+                $('#conflito-msg').text('');
+                $('#reservas-msg').text('');
+                $('#modalReserva').modal('show');
+                // Pré-calcular com a opção atual
+                calcularPreview();
+            };
 
-            // carregar minhas reservas
-            $.get('/api/reservas', function(reservas) {
-                let lista = '';
-                reservas.forEach(r => {
-                    lista += `<li class="list-group-item">${r.data_inicio} a ${r.data_fim} (${r.dias_uteis} dias) - ${r.status}</li>`;
+            function calcularPreview() {
+                const inicio = dataSelecionada;
+                const dias = parseInt($('#dias-opcao').val());
+                $.get('/api/feriados', function(feriados) {
+                    // Simula cálculo (usaremos o back-end depois, mas aqui já fazemos local)
+                    // Para evitar chamada extra, usamos a própria API de calendário para obter feriados
+                    // Mas vamos fazer um cálculo rápido local baseado nos dados do calendário
+                    let feriadosList = feriados || [];
+                    // calcular data fim
+                    let data = new Date(inicio.split('/')[2], inicio.split('/')[1]-1, inicio.split('/')[0]);
+                    let diasAdicionados = 0;
+                    let dataFim = new Date(data);
+                    while (diasAdicionados < dias) {
+                        dataFim.setDate(dataFim.getDate() + 1);
+                        let diaStr = ('0'+dataFim.getDate()).slice(-2)+'/'+('0'+(dataFim.getMonth()+1)).slice(-2)+'/'+dataFim.getFullYear();
+                        if (dataFim.getDay() !== 0 && dataFim.getDay() !== 6 && !feriadosList.includes(diaStr)) {
+                            diasAdicionados++;
+                        }
+                    }
+                    const fimStr = ('0'+dataFim.getDate()).slice(-2)+'/'+('0'+(dataFim.getMonth()+1)).slice(-2)+'/'+dataFim.getFullYear();
+                    $('#data-fim-preview').text(fimStr);
+                    $('#dias-uteis-preview').text(dias + ' dias úteis');
+
+                    // Verificar conflito e reservas no intervalo
+                    // Usar dados do calendário para verificar se há reservas no período
+                    let conflito = false;
+                    let reservasMsg = '';
+                    if (dadosCalendario) {
+                        let reservasNoPeriodo = [];
+                        let inicioDt = new Date(inicio.split('/')[2], inicio.split('/')[1]-1, inicio.split('/')[0]);
+                        let fimDt = new Date(dataFim);
+                        for (let d = new Date(inicioDt); d <= fimDt; d.setDate(d.getDate()+1)) {
+                            let diaStr = ('0'+d.getDate()).slice(-2)+'/'+('0'+(d.getMonth()+1)).slice(-2)+'/'+d.getFullYear();
+                            let diaObj = dadosCalendario.dias.find(item => item.data === diaStr);
+                            if (diaObj && diaObj.reservas && diaObj.reservas.length > 0) {
+                                diaObj.reservas.forEach(r => {
+                                    if (!reservasNoPeriodo.some(item => item.usuario === r.usuario && item.inicio === r.inicio && item.fim === r.fim)) {
+                                        reservasNoPeriodo.push(r);
+                                    }
+                                });
+                            }
+                        }
+                        if (reservasNoPeriodo.length > 0) {
+                            reservasMsg = '⚠️ Período com reservas de outros membros: ' + reservasNoPeriodo.map(r => r.usuario + ' ('+r.inicio+' a '+r.fim+')').join('; ');
+                        }
+                        // Verificar conflito de plantão (se todos membros da equipe estiverem de férias)
+                        // Isso será validado no back-end; apenas avisamos.
+                        // Podemos fazer uma checagem simples, mas o back-end já bloqueará.
+                    }
+                    $('#reservas-msg').text(reservasMsg);
                 });
-                $('#minhas-reservas').html(lista);
+            }
+
+            $('#dias-opcao').change(calcularPreview);
+
+            $('#btn-confirmar-reserva').click(function() {
+                const inicio = dataSelecionada;
+                const dias = parseInt($('#dias-opcao').val());
+                const usuarioId = {{ session.get('user_id') }};
+                $.ajax({
+                    url: '/api/reservas',
+                    method: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({
+                        usuario_id: usuarioId,
+                        data_inicio: inicio,
+                        dias_uteis: dias
+                    }),
+                    success: function(res) {
+                        if (res.success) {
+                            alert('Reserva confirmada!');
+                            $('#modalReserva').modal('hide');
+                            carregarCalendario(anoAtual, mesAtual);
+                            carregarMinhasReservas();
+                        } else {
+                            alert('Erro: ' + res.error);
+                        }
+                    },
+                    error: function(err) {
+                        alert('Erro ao reservar: ' + err.responseJSON.error);
+                    }
+                });
             });
+
+            function carregarMinhasReservas() {
+                $.get('/api/reservas', function(reservas) {
+                    let lista = '';
+                    let total = 0;
+                    reservas.forEach(r => {
+                        lista += `<li class="list-group-item d-flex justify-content-between align-items-center">
+                                    ${r.data_inicio} a ${r.data_fim} (${r.dias_uteis} dias) - ${r.status}
+                                    <button class="btn btn-sm btn-danger" onclick="cancelarReserva(${r.id})">Cancelar</button>
+                                </li>`;
+                        total += r.dias_uteis;
+                    });
+                    if (!lista) lista = '<li class="list-group-item">Nenhuma reserva.</li>';
+                    $('#minhas-reservas').html(lista);
+                    $('#total-dias').text('Total de dias reservados: ' + total + '/25');
+                });
+            }
+
+            window.cancelarReserva = function(id) {
+                if (!confirm('Cancelar esta reserva?')) return;
+                $.ajax({
+                    url: '/api/reservas?id=' + id,
+                    method: 'DELETE',
+                    success: function() {
+                        carregarMinhasReservas();
+                        carregarCalendario(anoAtual, mesAtual);
+                    },
+                    error: function(err) {
+                        alert('Erro ao cancelar: ' + err.responseJSON.error);
+                    }
+                });
+            };
+
+            $('#mes-anterior').click(function() {
+                if (mesAtual === 1) { mesAtual = 12; anoAtual--; }
+                else mesAtual--;
+                carregarCalendario(anoAtual, mesAtual);
+            });
+            $('#mes-proximo').click(function() {
+                if (mesAtual === 12) { mesAtual = 1; anoAtual++; }
+                else mesAtual++;
+                carregarCalendario(anoAtual, mesAtual);
+            });
+
+            // Inicializa
+            carregarCalendario(anoAtual, mesAtual);
+            carregarMinhasReservas();
         });
     </script>
 </body>
