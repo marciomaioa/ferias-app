@@ -11,10 +11,10 @@
         .dia { padding: 8px 4px; border-radius: 6px; background: white; border: 1px solid #ddd; text-align: center; font-size: 0.9rem; min-height: 65px; position: relative; transition: 0.2s; cursor: default; }
         .dia .data { font-weight: bold; }
         .dia .reserva-label { font-size: 0.6rem; background: rgba(0,0,0,0.1); border-radius: 3px; padding: 1px 3px; margin-top: 2px; display: block; }
-        .equipe1 { background-color: #FFB6C1; } /* rosa claro */
-        .equipe2 { background-color: #90EE90; } /* verde claro */
-        .equipe3 { background-color: #ADD8E6; } /* azul claro */
-        .equipe4 { background-color: #FFFFE0; } /* amarelo claro */
+        .equipe1 { background-color: #FFB6C1; }
+        .equipe2 { background-color: #90EE90; }
+        .equipe3 { background-color: #ADD8E6; }
+        .equipe4 { background-color: #FFFFE0; }
         .feriado { background-color: #ffcccc; }
         .reservado { border: 2px solid #dc3545; }
         .selecionavel { cursor: pointer; }
@@ -40,7 +40,6 @@
             </div>
         </div>
 
-        <!-- Legenda -->
         <div class="legenda">
             <div class="legenda-item"><span class="legenda-cor equipe1"></span> Equipe 1</div>
             <div class="legenda-item"><span class="legenda-cor equipe2"></span> Equipe 2</div>
@@ -50,17 +49,14 @@
             <div class="legenda-item"><span class="legenda-cor" style="border-color: red; border-width: 2px;"></span> Reservado</div>
         </div>
 
-        <!-- Navegação do mês -->
         <div class="cabecalho-mes">
             <button class="btn-mes" id="mes-anterior">◀</button>
             <h4 id="mes-titulo" class="mb-0"></h4>
             <button class="btn-mes" id="mes-proximo">▶</button>
         </div>
 
-        <!-- Grid do calendário -->
         <div id="calendario" class="calendario"></div>
 
-        <!-- Minhas reservas -->
         <div class="mt-4" style="max-width:700px; margin:20px auto;">
             <h5>Minhas reservas</h5>
             <ul id="minhas-reservas" class="list-group"></ul>
@@ -70,7 +66,7 @@
         </div>
     </div>
 
-    <!-- Modal para selecionar férias -->
+    <!-- Modal -->
     <div class="modal fade" id="modalReserva" tabindex="-1">
         <div class="modal-dialog">
             <div class="modal-content">
@@ -112,10 +108,6 @@
             let dadosCalendario = null;
             let dataSelecionada = null;
 
-            // Tooltips via Bootstrap
-            var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-            var tooltipList = tooltipTriggerList.map(function (el) { return new bootstrap.Tooltip(el); });
-
             function carregarCalendario(ano, mes) {
                 $.get('/api/calendario', {ano: ano, mes: mes}, function(data) {
                     dadosCalendario = data;
@@ -125,24 +117,25 @@
                     const primeiro = new Date(ano, mes-1, 1).getDay();
                     for (let i = 0; i < primeiro; i++) html += '<div></div>';
 
-                    data.dias.forEach(dia => {
+                    data.dias.forEach(function(dia) {
                         let classes = 'dia';
                         classes += ' equipe' + dia.equipe_plantao;
                         if (dia.feriado) classes += ' feriado';
                         if (dia.reservas && dia.reservas.length > 0) classes += ' reservado';
 
-                        // Se for selecionável (não feriado e não reservado por outro)
                         let selecionavel = !dia.feriado;
-                        if (selecionavel) {
-                            classes += ' selecionavel';
-                        }
+                        if (selecionavel) classes += ' selecionavel';
 
                         let tooltip = dia.data;
                         if (dia.reservas && dia.reservas.length > 0) {
                             tooltip += '\nReservas: ' + dia.reservas.map(r => r.usuario + ' ('+r.inicio+' a '+r.fim+')').join('; ');
                         }
 
-                        html += `<div class="${classes}" data-data="${dia.data}" data-reservas='${JSON.stringify(dia.reservas)}' title="${tooltip}" ${selecionavel ? 'onclick="abrirModal(\''+dia.data+'\')"' : ''}>
+                        // Construção segura do atributo onclick usando dados
+                        let reservasJson = JSON.stringify(dia.reservas).replace(/"/g, '&quot;');
+                        let onclickAttr = selecionavel ? `onclick="abrirModal('${dia.data}')"` : '';
+
+                        html += `<div class="${classes}" data-data="${dia.data}" data-reservas='${reservasJson}' title="${tooltip}" ${onclickAttr}>
                                     <div class="data">${dia.data.split('/')[0]}</div>
                                     ${dia.reservas && dia.reservas.length > 0 ? '<span class="reserva-label">🔴</span>' : ''}
                                 </div>`;
@@ -152,6 +145,7 @@
                 });
             }
 
+            // Função global para ser chamada pelo onclick
             window.abrirModal = function(data) {
                 dataSelecionada = data;
                 $('#data-inicio-selecionada').text(data);
@@ -160,7 +154,6 @@
                 $('#conflito-msg').text('');
                 $('#reservas-msg').text('');
                 $('#modalReserva').modal('show');
-                // Pré-calcular com a opção atual
                 calcularPreview();
             };
 
@@ -168,11 +161,7 @@
                 const inicio = dataSelecionada;
                 const dias = parseInt($('#dias-opcao').val());
                 $.get('/api/feriados', function(feriados) {
-                    // Simula cálculo (usaremos o back-end depois, mas aqui já fazemos local)
-                    // Para evitar chamada extra, usamos a própria API de calendário para obter feriados
-                    // Mas vamos fazer um cálculo rápido local baseado nos dados do calendário
                     let feriadosList = feriados || [];
-                    // calcular data fim
                     let data = new Date(inicio.split('/')[2], inicio.split('/')[1]-1, inicio.split('/')[0]);
                     let diasAdicionados = 0;
                     let dataFim = new Date(data);
@@ -187,9 +176,6 @@
                     $('#data-fim-preview').text(fimStr);
                     $('#dias-uteis-preview').text(dias + ' dias úteis');
 
-                    // Verificar conflito e reservas no intervalo
-                    // Usar dados do calendário para verificar se há reservas no período
-                    let conflito = false;
                     let reservasMsg = '';
                     if (dadosCalendario) {
                         let reservasNoPeriodo = [];
@@ -209,9 +195,6 @@
                         if (reservasNoPeriodo.length > 0) {
                             reservasMsg = '⚠️ Período com reservas de outros membros: ' + reservasNoPeriodo.map(r => r.usuario + ' ('+r.inicio+' a '+r.fim+')').join('; ');
                         }
-                        // Verificar conflito de plantão (se todos membros da equipe estiverem de férias)
-                        // Isso será validado no back-end; apenas avisamos.
-                        // Podemos fazer uma checagem simples, mas o back-end já bloqueará.
                     }
                     $('#reservas-msg').text(reservasMsg);
                 });
@@ -291,7 +274,6 @@
                 carregarCalendario(anoAtual, mesAtual);
             });
 
-            // Inicializa
             carregarCalendario(anoAtual, mesAtual);
             carregarMinhasReservas();
         });
