@@ -189,7 +189,11 @@ def verificar_prioridade(usuario_id):
     except Exception as e:
         return False, f"Erro: {e}"
 
-def verificar_conflito_plantao(equipe_id, data_inicio_str, data_fim_str, usuario_id, reserva_id=None):
+def verificar_conflito_plantao(equipe_id, data_inicio_str, data_fim_str, usuario_id, tipo_nova='normal', reserva_id=None):
+    """
+    Verifica se a nova reserva (para usuario_id) deixaria a equipe desfalcada em algum plantão.
+    Regra: no máximo 1 pessoa de férias normais E no máximo 1 pessoa de férias-prêmio por plantão.
+    """
     try:
         usuarios = get_cache("usuarios")
         membros = [u for u in usuarios if u.get("equipe_id") == equipe_id]
@@ -203,18 +207,34 @@ def verificar_conflito_plantao(equipe_id, data_inicio_str, data_fim_str, usuario
         while atual <= fim:
             data_str = atual.strftime("%d/%m/%Y")
             if equipe_plantao_para_data(data_str) == equipe_id:
-                ferias_no_dia = 0
+                normais_no_dia = 0
+                premios_no_dia = 0
+
                 for r in ferias:
                     r_inicio = datetime.strptime(r["data_inicio"], "%d/%m/%Y")
                     r_fim = datetime.strptime(r["data_fim"], "%d/%m/%Y")
                     if r_inicio <= atual <= r_fim:
                         user_reserva = next((u for u in usuarios if str(u.get("id")) == str(r.get("usuario_id"))), None)
                         if user_reserva and user_reserva.get("equipe_id") == equipe_id:
-                            ferias_no_dia += 1
+                            tipo = r.get('tipo', 'normal')
+                            if tipo == 'premium':
+                                premios_no_dia += 1
+                            else:
+                                normais_no_dia += 1
+
+                # Adiciona a nova reserva ao contador do tipo correspondente
                 if atual >= inicio and atual <= fim:
-                    ferias_no_dia += 1
-                if ferias_no_dia > 1:
-                    return False, f"No dia {data_str} (plantão Equipe {equipe_id}) {ferias_no_dia} membros estão de férias. Só é permitido 1."
+                    if tipo_nova == 'premium':
+                        premios_no_dia += 1
+                    else:
+                        normais_no_dia += 1
+
+                # Regra: no máximo 1 pessoa de cada tipo por plantão
+                if normais_no_dia > 1:
+                    return False, f"No dia {data_str} (plantão Equipe {equipe_id}) {normais_no_dia} membros estão de férias normais. Só é permitido 1."
+                if premios_no_dia > 1:
+                    return False, f"No dia {data_str} (plantão Equipe {equipe_id}) {premios_no_dia} membros estão de férias-prêmio. Só é permitido 1."
+
             atual += timedelta(days=1)
         return True, ""
     except Exception as e:
@@ -718,8 +738,8 @@ def api_reservas():
             return jsonify({"error": "Usuário não encontrado."}), 404
         equipe_id = user['equipe_id']
 
-        # Conflito de plantão
-        pode, msg = verificar_conflito_plantao(equipe_id, data_inicio, data_fim, user_id)
+        # Conflito de plantão (passando o tipo da nova reserva)
+        pode, msg = verificar_conflito_plantao(equipe_id, data_inicio, data_fim, user_id, tipo)
         if not pode:
             return jsonify({"error": msg}), 409
 
