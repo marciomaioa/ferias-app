@@ -384,11 +384,12 @@ def relatorio_pdf():
         """
         for r in m['reservas']:
             tipo = r.get('tipo', 'normal')
+            tipo_exibicao = 'Prêmio' if tipo == 'premium' else 'Normal'
             tabela += f"""
                 <tr>
                     <td>{r['data_inicio']} a {r['data_fim']}</td>
                     <td>{r['dias_uteis']}</td>
-                    <td>{'Premium' if tipo == 'premium' else 'Normal'}</td>
+                    <td>{tipo_exibicao}</td>
                     <td>{r['status']}</td>
                 </tr>
             """
@@ -655,7 +656,7 @@ def api_reservas():
         # Validações de acordo com o tipo
         if tipo == 'premium':
             if dias_uteis not in [15, 30]:
-                return jsonify({"error": "Férias Premium deve ter 15 ou 30 dias."}), 400
+                return jsonify({"error": "Férias-Prêmio deve ter 15 ou 30 dias."}), 400
             data_fim = proximo_dia_corrido(data_inicio, dias_uteis)
         else:
             if dias_uteis not in [10, 15, 25]:
