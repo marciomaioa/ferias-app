@@ -166,7 +166,7 @@ def equipe_plantao_para_data(data_str):
     return ORDEM_PLANTAO[pos]
 
 # =============================================================================
-# VALIDAÇÕES (prioridade, conflito)
+# VALIDAÇÕES (prioridade, conflito, período para prêmio)
 # =============================================================================
 
 def verificar_prioridade(usuario_id):
@@ -219,6 +219,14 @@ def verificar_conflito_plantao(equipe_id, data_inicio_str, data_fim_str, usuario
         return True, ""
     except Exception as e:
         return False, f"Erro: {e}"
+
+def validar_periodo_premium(data_inicio_str):
+    """Verifica se a data de início é no segundo semestre (>= 01/07)."""
+    data = datetime.strptime(data_inicio_str, "%d/%m/%Y")
+    # Consideramos o segundo semestre a partir de 1º de julho
+    if data.month < 7:
+        return False, "Férias-Prêmio só podem ser solicitadas a partir de 1º de julho."
+    return True, ""
 
 # =============================================================================
 # DECORADORES
@@ -657,6 +665,10 @@ def api_reservas():
         if tipo == 'premium':
             if dias_uteis not in [15, 30]:
                 return jsonify({"error": "Férias-Prêmio deve ter 15 ou 30 dias."}), 400
+            # Verifica se a data é no segundo semestre
+            pode, msg = validar_periodo_premium(data_inicio)
+            if not pode:
+                return jsonify({"error": msg}), 400
             data_fim = proximo_dia_corrido(data_inicio, dias_uteis)
         else:
             if dias_uteis not in [10, 15, 25]:

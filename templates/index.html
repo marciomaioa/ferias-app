@@ -15,7 +15,7 @@
         .equipe2 { background-color: #90EE90; }
         .equipe3 { background-color: #ADD8E6; }
         .equipe4 { background-color: #FFFFE0; }
-        .feriado { background-color: #ffcccc; }
+        .feriado { border: 2px solid #ff0000; }          /* cor da equipe visível, borda vermelha */
         .reservado { border: 2px solid #dc3545; }
         .selecionavel { cursor: pointer; }
         .selecionavel:hover { transform: scale(1.02); box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
@@ -26,14 +26,14 @@
         .btn-mes { background: #6c757d; color: white; border: none; padding: 5px 15px; border-radius: 5px; }
         .btn-mes:hover { background: #5a6268; }
         .modal-body .resumo { background: #f8f9fa; padding: 10px; border-radius: 5px; }
+        .tipo-premium-disabled { color: #999; cursor: not-allowed; }
     </style>
 </head>
 <body>
-    <div id="app-data" data-user-id="{{ session.get('user_id') }}" style="display:none;"></div>
     <div class="container">
         <div class="d-flex justify-content-between align-items-center mb-3">
             <h2>📅 Férias - {{ usuario }} 
-                <span class="badge bg-primary" style="font-size: 0.6em;">Equipe {{ equipe_id }}</span>
+                <small class="text-muted" style="font-size: 0.6em;">(Equipe {{ session.get('equipe_id') }})</small>
             </h2>
             <div>
                 {% if is_admin %}
@@ -48,7 +48,7 @@
             <div class="legenda-item"><span class="legenda-cor equipe2"></span> Equipe 2</div>
             <div class="legenda-item"><span class="legenda-cor equipe3"></span> Equipe 3</div>
             <div class="legenda-item"><span class="legenda-cor equipe4"></span> Equipe 4</div>
-            <div class="legenda-item"><span class="legenda-cor feriado"></span> Feriado</div>
+            <div class="legenda-item"><span class="legenda-cor" style="border: 2px solid red;"></span> Feriado</div>
             <div class="legenda-item"><span class="legenda-cor" style="border-color: red; border-width: 2px;"></span> Reservado</div>
         </div>
 
@@ -83,13 +83,18 @@
                         <label for="tipo-ferias" class="form-label">Tipo de férias</label>
                         <select id="tipo-ferias" class="form-select">
                             <option value="normal">Normal (dias úteis)</option>
-                            <option value="premium">Premium (dias corridos)</option>
+                            <option value="premium">Prêmio (dias corridos – apenas 2º semestre)</option>
                         </select>
+                        <div id="msg-premium-periodo" class="text-danger mt-1" style="display:none;">
+                            ⚠️ Férias-Prêmio só podem ser solicitadas a partir de 1º de julho.
+                        </div>
                     </div>
                     <div class="mb-3">
                         <label for="dias-opcao" class="form-label">Quantos dias?</label>
                         <select id="dias-opcao" class="form-select">
-                            <!-- preenchido via JS -->
+                            <option value="10">10 dias úteis</option>
+                            <option value="15">15 dias úteis</option>
+                            <option value="25">25 dias úteis</option>
                         </select>
                     </div>
                     <div class="resumo">
@@ -116,6 +121,42 @@
             let dadosCalendario = null;
             let dataSelecionada = null;
 
+            function atualizarOpcoesDias(tipo) {
+                const diasSelect = $('#dias-opcao');
+                diasSelect.empty();
+                if (tipo === 'normal') {
+                    diasSelect.append('<option value="10">10 dias úteis</option>');
+                    diasSelect.append('<option value="15">15 dias úteis</option>');
+                    diasSelect.append('<option value="25">25 dias úteis</option>');
+                } else {
+                    diasSelect.append('<option value="15">15 dias corridos</option>');
+                    diasSelect.append('<option value="30">30 dias corridos</option>');
+                }
+            }
+
+            // Verifica se a data é no segundo semestre
+            function isSegundoSemestre(dataStr) {
+                const partes = dataStr.split('/');
+                const mes = parseInt(partes[1]);
+                return mes >= 7;
+            }
+
+            $('#tipo-ferias').change(function() {
+                const tipo = $(this).val();
+                const data = dataSelecionada;
+                if (tipo === 'premium' && !isSegundoSemestre(data)) {
+                    $('#msg-premium-periodo').show();
+                    $(this).addClass('is-invalid');
+                    $('#btn-confirmar-reserva').prop('disabled', true);
+                } else {
+                    $('#msg-premium-periodo').hide();
+                    $(this).removeClass('is-invalid');
+                    $('#btn-confirmar-reserva').prop('disabled', false);
+                }
+                atualizarOpcoesDias(tipo);
+                calcularPreview();
+            });
+
             function carregarCalendario(ano, mes) {
                 $.get('/api/calendario', {ano: ano, mes: mes}, function(data) {
                     dadosCalendario = data;
@@ -131,12 +172,14 @@
                         if (dia.feriado) classes += ' feriado';
                         if (dia.reservas && dia.reservas.length > 0) classes += ' reservado';
 
-                        let selecionavel = !dia.feriado;
+                        // Permite selecionar feriados se o tipo for 'premium'
+                        let tipoAtual = $('#tipo-ferias').val() || 'normal';
+                        let selecionavel = !dia.feriado || tipoAtual === 'premium';
                         if (selecionavel) classes += ' selecionavel';
 
                         let tooltip = dia.data;
                         if (dia.reservas && dia.reservas.length > 0) {
-                            tooltip += '\nReservas: ' + dia.reservas.map(r => r.usuario + ' ('+r.inicio+' a '+r.fim+') - ' + r.tipo).join('; ');
+                            tooltip += '\nReservas: ' + dia.reservas.map(r => r.usuario + ' ('+r.inicio+' a '+r.fim+')' + (r.tipo === 'premium' ? ' - Prêmio' : '')).join('; ');
                         }
 
                         let reservasJson = JSON.stringify(dia.reservas).replace(/"/g, '&quot;');
@@ -144,6 +187,7 @@
 
                         html += `<div class="${classes}" data-data="${dia.data}" data-reservas='${reservasJson}' title="${tooltip}" ${onclickAttr}>
                                     <div class="data">${dia.data.split('/')[0]}</div>
+                                    ${dia.feriado ? ' 🗓️' : ''}
                                     ${dia.reservas && dia.reservas.length > 0 ? '<span class="reserva-label">🔴</span>' : ''}
                                 </div>`;
                     });
@@ -159,45 +203,45 @@
                 $('#dias-uteis-preview').text('');
                 $('#conflito-msg').text('');
                 $('#reservas-msg').text('');
-                // Define tipo normal por padrão
-                $('#tipo-ferias').val('normal');
+                $('#msg-premium-periodo').hide();
+                $('#tipo-ferias').removeClass('is-invalid');
+                $('#btn-confirmar-reserva').prop('disabled', false);
+
+                // Verifica se a data é no segundo semestre para pré-selecionar 'normal' se não for
+                if (isSegundoSemestre(data)) {
+                    $('#tipo-ferias').val('normal');
+                } else {
+                    $('#tipo-ferias').val('normal');
+                    // Desabilita a opção premium visualmente, mas ainda permite mudar para normal
+                    // Vamos apenas mostrar uma mensagem se o usuário tentar selecionar premium
+                }
                 atualizarOpcoesDias('normal');
                 $('#modalReserva').modal('show');
                 calcularPreview();
             };
-
-            function atualizarOpcoesDias(tipo) {
-                const diasSelect = $('#dias-opcao');
-                diasSelect.empty();
-                if (tipo === 'normal') {
-                    diasSelect.append('<option value="10">10 dias úteis</option>');
-                    diasSelect.append('<option value="15">15 dias úteis</option>');
-                    diasSelect.append('<option value="25">25 dias úteis</option>');
-                } else {
-                    diasSelect.append('<option value="15">15 dias corridos</option>');
-                    diasSelect.append('<option value="30">30 dias corridos</option>');
-                }
-            }
-
-            $('#tipo-ferias').change(function() {
-                const tipo = $(this).val();
-                atualizarOpcoesDias(tipo);
-                calcularPreview();
-            });
 
             function calcularPreview() {
                 const inicio = dataSelecionada;
                 const dias = parseInt($('#dias-opcao').val());
                 const tipo = $('#tipo-ferias').val();
 
+                // Se for premium e não for segundo semestre, exibir mensagem e não calcular
+                if (tipo === 'premium' && !isSegundoSemestre(inicio)) {
+                    $('#data-fim-preview').text('');
+                    $('#dias-uteis-preview').text('');
+                    $('#conflito-msg').text('Férias-Prêmio disponíveis apenas a partir de 1º de julho.');
+                    return;
+                }
+
                 if (tipo === 'premium') {
                     let data = new Date(inicio.split('/')[2], inicio.split('/')[1]-1, inicio.split('/')[0]);
                     data.setDate(data.getDate() + dias - 1);
                     const fimStr = ('0'+data.getDate()).slice(-2)+'/'+('0'+(data.getMonth()+1)).slice(-2)+'/'+data.getFullYear();
                     $('#data-fim-preview').text(fimStr);
-                    $('#dias-uteis-preview').text(dias + ' dias corridos');
+                    $('#dias-uteis-preview').text(dias + ' dias corridos (Prêmio)');
                     $('#conflito-msg').text('');
-                    // Verificar reservas no período (apenas informativo)
+
+                    // Verifica reservas existentes no período
                     let reservasMsg = '';
                     if (dadosCalendario) {
                         let reservasNoPeriodo = [];
@@ -215,15 +259,16 @@
                             }
                         }
                         if (reservasNoPeriodo.length > 0) {
-                            reservasMsg = '⚠️ Período com reservas de outros membros: ' + reservasNoPeriodo.map(r => r.usuario + ' ('+r.inicio+' a '+r.fim+') - ' + r.tipo).join('; ');
+                            reservasMsg = '⚠️ Período com reservas de outros membros: ' + reservasNoPeriodo.map(r => r.usuario + ' ('+r.inicio+' a '+r.fim+')' + (r.tipo === 'premium' ? ' - Prêmio' : '')).join('; ');
                         }
                     }
                     $('#reservas-msg').text(reservasMsg);
                 } else {
+                    // Férias normais (dias úteis)
                     $.get('/api/feriados', function(feriados) {
                         let feriadosList = feriados || [];
                         let data = new Date(inicio.split('/')[2], inicio.split('/')[1]-1, inicio.split('/')[0]);
-                        let diasAdicionados = 0;
+                        let diasAdicionados = 1; // conta o dia de início
                         let dataFim = new Date(data);
                         while (diasAdicionados < dias) {
                             dataFim.setDate(dataFim.getDate() + 1);
@@ -253,7 +298,7 @@
                                 }
                             }
                             if (reservasNoPeriodo.length > 0) {
-                                reservasMsg = '⚠️ Período com reservas de outros membros: ' + reservasNoPeriodo.map(r => r.usuario + ' ('+r.inicio+' a '+r.fim+') - ' + r.tipo).join('; ');
+                                reservasMsg = '⚠️ Período com reservas de outros membros: ' + reservasNoPeriodo.map(r => r.usuario + ' ('+r.inicio+' a '+r.fim+')' + (r.tipo === 'premium' ? ' - Prêmio' : '')).join('; ');
                             }
                         }
                         $('#reservas-msg').text(reservasMsg);
@@ -267,7 +312,14 @@
                 const inicio = dataSelecionada;
                 const dias = parseInt($('#dias-opcao').val());
                 const tipo = $('#tipo-ferias').val();
-                const usuarioId = Number($('#app-data').data('user-id')) || null;
+
+                // Validação adicional antes de enviar
+                if (tipo === 'premium' && !isSegundoSemestre(inicio)) {
+                    alert('Férias-Prêmio só podem ser solicitadas a partir de 1º de julho.');
+                    return;
+                }
+
+                const usuarioId = Number("{{ session.get('user_id') }}");
                 $.ajax({
                     url: '/api/reservas',
                     method: 'POST',
@@ -300,9 +352,9 @@
                     let total = 0;
                     reservas.forEach(r => {
                         const tipo = r.tipo || 'normal';
-                        const diasTexto = `${r.dias_uteis} ${tipo === 'normal' ? 'úteis' : 'corridos'}`;
+                        const tipoLabel = tipo === 'premium' ? ' (Prêmio)' : '';
                         lista += `<li class="list-group-item d-flex justify-content-between align-items-center">
-                                    ${r.data_inicio} a ${r.data_fim} (${diasTexto}) - ${tipo.charAt(0).toUpperCase() + tipo.slice(1)} - ${r.status}
+                                    ${r.data_inicio} a ${r.data_fim} (${r.dias_uteis} dias${tipoLabel}) - ${r.status}
                                     <button class="btn btn-sm btn-danger" onclick="cancelarReserva(${r.id})">Cancelar</button>
                                 </li>`;
                         total += r.dias_uteis;
