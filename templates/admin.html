@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Painel Admin</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container mt-4">
+        <h1>👑 Painel Admin - Equipe {{ equipe }}</h1>
+        <a href="/" class="btn btn-secondary">Voltar</a>
+        <a href="/logout" class="btn btn-danger">Sair</a>
+
+        <div class="row mt-4">
+            <div class="col-md-6">
+                <h3>Usuários da equipe</h3>
+                <table class="table table-bordered" id="tabela-usuarios">
+                    <thead><tr><th>ID</th><th>Nome</th><th>Nível</th><th>Login</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+                <button class="btn btn-primary" id="btn-novo-usuario">+ Novo Usuário</button>
+            </div>
+            <div class="col-md-6">
+                <h3>Configuração</h3>
+                <form id="form-config">
+                    <div class="mb-3">
+                        <label for="ano" class="form-label">Ano</label>
+                        <input type="number" class="form-control" id="ano" name="ano" value="2027">
+                    </div>
+                    <button type="submit" class="btn btn-success">Atualizar feriados</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script>
+        $(function() {
+            function carregarUsuarios() {
+                $.get('/api/admin/usuarios', function(usuarios) {
+                    let html = '';
+                    usuarios.forEach(u => {
+                        html += `<tr><td>${u.id}</td><td>${u.nome}</td><td>${u.nivel}</td><td>${u.login}</td></tr>`;
+                    });
+                    $('#tabela-usuarios tbody').html(html);
+                });
+            }
+            carregarUsuarios();
+
+            $('#btn-novo-usuario').click(function() {
+                const nome = prompt('Nome:');
+                if (!nome) return;
+                const nivel = prompt('Nível (1 a 4):');
+                const login = prompt('Login:');
+                const senha = prompt('Senha:');
+                if (!nome || !nivel || !login || !senha) return;
+                $.post('/api/admin/usuarios', {
+                    nome, nivel: parseInt(nivel), login, senha
+                }, function() {
+                    carregarUsuarios();
+                }).fail(function(err) {
+                    alert('Erro: ' + err.responseJSON.error);
+                });
+            });
+
+            $('#form-config').submit(function(e) {
+                e.preventDefault();
+                const ano = $('#ano').val();
+                $.post('/api/admin/config', {ano: parseInt(ano)}, function(res) {
+                    alert('Feriados atualizados para ' + res.ano);
+                }).fail(function(err) {
+                    alert('Erro: ' + err.responseJSON.error);
+                });
+            });
+        });
+    </script>
+</body>
+</html>

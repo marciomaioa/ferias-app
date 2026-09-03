@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Calendário de Férias</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { padding-top: 20px; background: #f4f6f9; }
+        .calendario { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+        .dia { padding: 10px; border-radius: 5px; background: white; border: 1px solid #ddd; text-align: center; min-height: 60px; }
+        .equipe1 { background-color: #FFB6C1; }  /* rosa claro */
+        .equipe2 { background-color: #90EE90; }  /* verde claro */
+        .equipe3 { background-color: #ADD8E6; }  /* azul claro */
+        .equipe4 { background-color: #FFFFE0; }  /* amarelo claro */
+        .feriado { background-color: #ffcccc; }
+        .reservado { border: 2px solid red; }
+        .legenda { display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 15px; }
+        .legenda span { display: inline-block; width: 20px; height: 20px; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h1>📅 Calendário de Férias - {{ usuario }}</h1>
+            <a href="/logout" class="btn btn-danger">Sair</a>
+        </div>
+
+        <div class="legenda">
+            <div><span class="equipe1"></span> Equipe 1</div>
+            <div><span class="equipe2"></span> Equipe 2</div>
+            <div><span class="equipe3"></span> Equipe 3</div>
+            <div><span class="equipe4"></span> Equipe 4</div>
+        </div>
+
+        <div id="calendario" class="calendario">
+            <!-- carregado via JS -->
+        </div>
+
+        <div class="mt-4">
+            <h4>Minhas reservas</h4>
+            <ul id="minhas-reservas" class="list-group"></ul>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script>
+        $(function() {
+            function carregarCalendario(ano, mes) {
+                $.get('/api/calendario', {ano, mes}, function(data) {
+                    let html = '';
+                    // cabeçalho dias da semana
+                    const diasSemana = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
+                    html += diasSemana.map(d => `<div class="fw-bold">${d}</div>`).join('');
+                    
+                    // preencher dias
+                    const primeiro = new Date(data.ano, data.mes-1, 1).getDay();
+                    for (let i = 0; i < primeiro; i++) html += '<div></div>';
+
+                    data.dias.forEach(dia => {
+                        let classes = 'dia';
+                        classes += ' equipe' + dia.equipe_plantao;
+                        if (dia.feriado) classes += ' feriado';
+                        if (dia.reservas && dia.reservas.length > 0) classes += ' reservado';
+                        
+                        let tooltip = dia.data;
+                        if (dia.reservas && dia.reservas.length > 0) {
+                            tooltip += '<br>Reservas: ' + dia.reservas.map(r => r.usuario).join(', ');
+                        }
+                        html += `<div class="${classes}" title="${tooltip}">${dia.data}</div>`;
+                    });
+                    $('#calendario').html(html);
+                });
+            }
+
+            // carregar mês atual
+            const hoje = new Date();
+            carregarCalendario(hoje.getFullYear(), hoje.getMonth()+1);
+
+            // carregar minhas reservas
+            $.get('/api/reservas', function(reservas) {
+                let lista = '';
+                reservas.forEach(r => {
+                    lista += `<li class="list-group-item">${r.data_inicio} a ${r.data_fim} (${r.dias_uteis} dias) - ${r.status}</li>`;
+                });
+                $('#minhas-reservas').html(lista);
+            });
+        });
+    </script>
+</body>
+</html>
