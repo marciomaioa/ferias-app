@@ -128,7 +128,7 @@
     <script>
         $(function() {
             const modalUsuario = new bootstrap.Modal(document.getElementById('modalUsuario'));
-            const globalAdmin = {{ global_admin|lower }};
+            const globalAdmin = JSON.parse('{{ global_admin | tojson | safe }}');
 
             function carregarUsuarios() {
                 $.get('/api/admin/usuarios', function(usuarios) {
@@ -299,7 +299,7 @@
             });
 
             // Gerar PDF para todas as equipes (apenas global_admin)
-            {% if global_admin %}
+            /* {% if global_admin %} */
             $('#btn-gerar-pdf-todas').click(function() {
                 const equipes = [1, 2, 3, 4];
                 equipes.forEach(eq => {
@@ -314,7 +314,7 @@
                 });
                 alert('Gerando PDFs para todas as equipes. Verifique os downloads.');
             });
-            {% endif %}
+            /* {% endif %} */
         });
     </script>
 </body>
