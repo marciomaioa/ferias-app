@@ -15,14 +15,18 @@ import holidays
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key")
 
-# ============ CONEXÃO ============
+# =============================================================================
+# CONEXÃO COM GOOGLE SHEETS
+# =============================================================================
+
 def obter_credenciais():
+    """Obtém as credenciais a partir da variável GOOGLE_CREDENTIALS (Base64 ou JSON)."""
     creds_b64 = os.environ.get("GOOGLE_CREDENTIALS")
     if not creds_b64:
         raise Exception("GOOGLE_CREDENTIALS não definida.")
     try:
         return json.loads(base64.b64decode(creds_b64).decode("utf-8"))
-    except:
+    except Exception:
         return json.loads(creds_b64)
 
 def conectar_planilha():
@@ -47,27 +51,40 @@ def get_worksheet(name):
         raise Exception("Planilha não conectada.")
     return sheet.worksheet(name)
 
-# ============ CACHE EM MEMÓRIA ============
+# =============================================================================
+# CACHE EM MEMÓRIA
+# =============================================================================
+
 cache = {
     "feriados": {"data": None, "timestamp": 0},
     "equipes": {"data": None, "timestamp": 0},
     "usuarios": {"data": None, "timestamp": 0},
     "ferias": {"data": None, "timestamp": 0},
 }
-CACHE_TTL = 60  # segundos (1 minuto)
+CACHE_TTL = 60  # segundos
 
 def get_cache(key, force_refresh=False):
     """Retorna dados do cache ou recarrega se expirado."""
     now = time.time()
     if force_refresh or cache[key]["data"] is None or (now - cache[key]["timestamp"] > CACHE_TTL):
         try:
-            ws = get_worksheet(key.capitalize())
-            dados = ws.get_all_records()
-            cache[key]["data"] = dados
-            cache[key]["timestamp"] = now
+            # Mapeia nome da aba: 'feriados' não é uma aba, mas usamos Config para feriados
+            if key == "feriados":
+                ws = get_worksheet("Config")
+                records = ws.get_all_records()
+                if records:
+                    feriados = json.loads(records[0].get("feriados", "[]"))
+                else:
+                    feriados = []
+                cache["feriados"]["data"] = feriados
+                cache["feriados"]["timestamp"] = now
+            else:
+                ws = get_worksheet(key.capitalize())
+                dados = ws.get_all_records()
+                cache[key]["data"] = dados
+                cache[key]["timestamp"] = now
         except Exception as e:
             print(f"Erro ao carregar cache para {key}: {e}")
-            # Retorna dados antigos se houver
             if cache[key]["data"] is None:
                 raise
     return cache[key]["data"]
@@ -82,31 +99,39 @@ def invalidate_cache(key=None):
             cache[k]["data"] = None
             cache[k]["timestamp"] = 0
 
-# ============ FUNÇÕES AUXILIARES ============
+# =============================================================================
+# FUNÇÕES AUXILIARES
+# =============================================================================
 
 def get_feriados_do_ano(ano):
+    """Retorna lista de feriados nacionais do Brasil para o ano (formato DD/MM/AAAA)."""
     return [d.strftime("%d/%m/%Y") for d in holidays.Brazil(years=ano).keys()]
 
 def ler_config():
-    # Config é uma aba separada; vamos cachear também (com nome "config")
+    """Lê a configuração (ano e feriados) da aba Config."""
     try:
         ws = get_worksheet("Config")
         records = ws.get_all_records()
         if not records:
             return {"ano": 2027, "feriados": []}
         linha = records[0]
-        return {"ano": int(linha.get("ano", 2027)), "feriados": json.loads(linha.get("feriados", "[]"))}
-    except:
+        return {
+            "ano": int(linha.get("ano", 2027)),
+            "feriados": json.loads(linha.get("feriados", "[]"))
+        }
+    except Exception:
         return {"ano": 2027, "feriados": []}
 
 def atualizar_config(ano, feriados):
+    """Atualiza a aba Config com ano e lista de feriados."""
     ws = get_worksheet("Config")
     ws.clear()
     ws.update(range_name="A1", values=[["ano", "feriados"]])
     ws.append_row([ano, json.dumps(feriados)])
-    invalidate_cache("config")
+    invalidate_cache("feriados")
 
 def calcular_dias_uteis(data_inicio_str, data_fim_str, feriados):
+    """Conta dias úteis entre duas datas (inclusive), excluindo fins de semana e feriados."""
     inicio = datetime.strptime(data_inicio_str, "%d/%m/%Y")
     fim = datetime.strptime(data_fim_str, "%d/%m/%Y")
     dias = 0
@@ -126,7 +151,7 @@ def proximo_dia_util(data_inicio_str, quantidade, feriados):
     data = datetime.strptime(data_inicio_str, "%d/%m/%Y")
     # Se a data de início já for útil (não FDS e não feriado), ela conta como dia 1
     dias_contados = 1 if (data.weekday() < 5 and data.strftime("%d/%m/%Y") not in feriados) else 0
-    
+
     # Enquanto não atingir a quantidade desejada, avança um dia
     while dias_contados < quantidade:
         data += timedelta(days=1)
@@ -135,12 +160,20 @@ def proximo_dia_util(data_inicio_str, quantidade, feriados):
     return data.strftime("%d/%m/%Y")
 
 def equipe_plantao_para_data(data_str):
+    """
+    Retorna o ID da equipe (1 a 4) que está de plantão em uma determinada data.
+    Regra: Dia 1 -> Equipe2, Dia 2 -> Equipe3, Dia 3 -> Equipe4, Dia 4 -> Equipe1, repete.
+    """
     dt = datetime.strptime(data_str, "%d/%m/%Y")
     dia_ano = dt.timetuple().tm_yday
     ordem = [2, 3, 4, 1]
     return ordem[(dia_ano - 1) % 4]
 
 def verificar_prioridade(usuario_id):
+    """
+    Verifica se o usuário pode fazer uma nova reserva com base no nível.
+    Retorna (bool, mensagem).
+    """
     try:
         usuarios = get_cache("usuarios")
         usuario = next((u for u in usuarios if str(u.get("id")) == str(usuario_id)), None)
@@ -148,6 +181,7 @@ def verificar_prioridade(usuario_id):
             return False, "Usuário não encontrado."
         equipe_id = usuario["equipe_id"]
         nivel = usuario["nivel"]
+        # Usuários da mesma equipe com nível inferior
         inferiores = [u for u in usuarios if u.get("equipe_id") == equipe_id and u.get("nivel", 999) < nivel]
         if not inferiores:
             return True, ""
@@ -158,9 +192,13 @@ def verificar_prioridade(usuario_id):
                 return False, f"Usuário {inf.get('nome')} (nível {inf.get('nivel')}) ainda tem {total} dias; precisa de 25."
         return True, ""
     except Exception as e:
-        return False, f"Erro: {e}"
+        return False, f"Erro ao verificar prioridade: {e}"
 
 def verificar_conflito_plantao(equipe_id, data_inicio_str, data_fim_str, reserva_id=None):
+    """
+    Verifica se a reserva proposta deixaria a equipe desfalcada em algum plantão.
+    Retorna (bool, mensagem).
+    """
     try:
         usuarios = get_cache("usuarios")
         membros = [u for u in usuarios if u.get("equipe_id") == equipe_id]
@@ -187,13 +225,77 @@ def verificar_conflito_plantao(equipe_id, data_inicio_str, data_fim_str, reserva
             atual += timedelta(days=1)
         return True, ""
     except Exception as e:
-        return False, f"Erro: {e}"
+        return False, f"Erro ao verificar conflito: {e}"
 
-# ============ AUTENTICAÇÃO ============
-# ... (mantenha as mesmas rotas de login, logout, decorators) ...
-# Por brevidade, omiti as repetições, mas você deve manter o código de autenticação já existente.
+# =============================================================================
+# DECORADORES DE AUTENTICAÇÃO
+# =============================================================================
 
-# ============ PÁGINAS PRINCIPAIS ============
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if 'user_id' not in session:
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated
+
+def admin_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if 'user_id' not in session or not session.get('is_admin'):
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated
+
+# =============================================================================
+# ROTAS DE AUTENTICAÇÃO
+# =============================================================================
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        login = request.form.get('login')
+        senha = request.form.get('senha')
+        if not login or not senha:
+            return render_template('login.html', erro="Preencha todos os campos.")
+        try:
+            # Verifica se é admin (aba Equipes)
+            ws_equipes = get_worksheet("Equipes")
+            equipes = ws_equipes.get_all_records()
+            admin = next((eq for eq in equipes if eq.get("login_admin") == login), None)
+            if admin and check_password_hash(admin.get("senha_admin"), senha):
+                session['user_id'] = f"admin_{admin['id']}"
+                session['is_admin'] = True
+                session['equipe_id'] = admin['id']
+                session['nome'] = admin['nome']
+                session['login'] = login
+                return redirect(url_for('admin_panel'))
+            # Verifica se é usuário comum (aba Usuarios)
+            ws_usuarios = get_worksheet("Usuarios")
+            usuarios = ws_usuarios.get_all_records()
+            user = next((u for u in usuarios if u.get("login") == login), None)
+            if user and check_password_hash(user.get("senha_hash"), senha):
+                session['user_id'] = user['id']
+                session['is_admin'] = False
+                session['equipe_id'] = user['equipe_id']
+                session['nome'] = user['nome']
+                session['login'] = login
+                session['nivel'] = user['nivel']
+                return redirect(url_for('index'))
+            return render_template('login.html', erro="Login ou senha inválidos.")
+        except Exception as e:
+            return render_template('login.html', erro=f"Erro: {e}")
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+# =============================================================================
+# PÁGINAS PRINCIPAIS
+# =============================================================================
+
 @app.route('/')
 @login_required
 def index():
@@ -204,7 +306,10 @@ def index():
 def admin_panel():
     return render_template('admin.html', equipe=session.get('equipe_id'))
 
-# ============ API TESTE ============
+# =============================================================================
+# API: TESTE DE CONEXÃO
+# =============================================================================
+
 @app.route('/test-sheet')
 def test_sheet():
     try:
@@ -213,13 +318,19 @@ def test_sheet():
     except Exception as e:
         return jsonify({"status": "erro", "mensagem": str(e)}), 500
 
-# ============ API FERIADOS ============
+# =============================================================================
+# API: FERIADOS
+# =============================================================================
+
 @app.route('/api/feriados')
 def api_feriados():
     config = ler_config()
     return jsonify(config['feriados'])
 
-# ============ API CALENDÁRIO ============
+# =============================================================================
+# API: CALENDÁRIO
+# =============================================================================
+
 @app.route('/api/calendario')
 @login_required
 def api_calendario():
@@ -276,7 +387,10 @@ def api_calendario():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ============ API RESERVAS ============
+# =============================================================================
+# API: RESERVAS (GET, POST, DELETE)
+# =============================================================================
+
 @app.route('/api/reservas', methods=['GET', 'POST', 'DELETE'])
 @login_required
 def api_reservas():
@@ -302,6 +416,7 @@ def api_reservas():
         data_inicio = data['data_inicio']
         dias_uteis = int(data['dias_uteis'])
 
+        # Prioridade
         pode, msg = verificar_prioridade(user_id)
         if not pode:
             return jsonify({"error": msg}), 403
@@ -310,29 +425,32 @@ def api_reservas():
         feriados = config['feriados']
         data_fim = proximo_dia_util(data_inicio, dias_uteis, feriados)
 
+        # Verificar total de dias do usuário
         ferias = get_cache("ferias")
         total_atual = sum([int(r.get('dias_uteis', 0)) for r in ferias if str(r.get('usuario_id')) == str(user_id)])
         if total_atual + dias_uteis > 25:
             return jsonify({"error": f"Usuário já tem {total_atual} dias; limite 25."}), 400
 
+        # Obter equipe do usuário
         usuarios = get_cache("usuarios")
         user = next((u for u in usuarios if str(u['id']) == str(user_id)), None)
         if not user:
             return jsonify({"error": "Usuário não encontrado."}), 404
         equipe_id = user['equipe_id']
 
+        # Conflito de plantão
         pode, msg = verificar_conflito_plantao(equipe_id, data_inicio, data_fim)
         if not pode:
             return jsonify({"error": msg}), 409
 
-        # Grava na planilha (invalida cache)
+        # Inserir na planilha
         ws_ferias = get_worksheet("Ferias")
         ids = [int(r.get('id', 0)) for r in ferias]
         novo_id = max(ids) + 1 if ids else 1
         ws_ferias.append_row([
             novo_id, user_id, data_inicio, data_fim, dias_uteis, "aprovado"
         ])
-        invalidate_cache("ferias")  # limpa cache para próxima leitura
+        invalidate_cache("ferias")
         return jsonify({"success": True, "id": novo_id})
 
     elif request.method == 'DELETE':
@@ -341,7 +459,7 @@ def api_reservas():
             return jsonify({"error": "ID obrigatório."}), 400
         try:
             ws_ferias = get_worksheet("Ferias")
-            ferias = ws_ferias.get_all_records()  # lê direto para encontrar linha
+            ferias = ws_ferias.get_all_records()  # leitura direta para encontrar linha
             idx = None
             for i, r in enumerate(ferias, start=2):
                 if str(r.get('id')) == str(reserva_id):
@@ -357,7 +475,10 @@ def api_reservas():
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
-# ============ API ADMIN ============
+# =============================================================================
+# API: ADMIN – USUÁRIOS
+# =============================================================================
+
 @app.route('/api/admin/usuarios', methods=['GET', 'POST', 'PUT'])
 @admin_required
 def admin_usuarios():
@@ -366,6 +487,7 @@ def admin_usuarios():
         try:
             usuarios = get_cache("usuarios")
             da_equipe = [u for u in usuarios if u.get('equipe_id') == equipe_id]
+            # Remove hashes para não expor
             for u in da_equipe:
                 u.pop('senha_hash', None)
             return jsonify(da_equipe)
@@ -411,14 +533,20 @@ def admin_usuarios():
             header = list(usuarios[0].keys())
             for campo in campos:
                 if campo in data:
-                    ws_usuarios.update_cell(idx, header.index(campo)+1, data[campo])
+                    coluna = header.index(campo) + 1
+                    ws_usuarios.update_cell(idx, coluna, data[campo])
             if 'senha' in data and data['senha']:
                 nova_hash = generate_password_hash(data['senha'])
-                ws_usuarios.update_cell(idx, header.index('senha_hash')+1, nova_hash)
+                coluna_hash = header.index('senha_hash') + 1
+                ws_usuarios.update_cell(idx, coluna_hash, nova_hash)
             invalidate_cache("usuarios")
             return jsonify({"success": True})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
+
+# =============================================================================
+# API: ADMIN – CONFIGURAÇÃO
+# =============================================================================
 
 @app.route('/api/admin/config', methods=['GET', 'POST'])
 @admin_required
@@ -434,12 +562,15 @@ def admin_config():
             novo_ano = int(novo_ano)
             feriados = get_feriados_do_ano(novo_ano)
             atualizar_config(novo_ano, feriados)
-            invalidate_cache("config")
+            invalidate_cache("feriados")
             return jsonify({"success": True, "ano": novo_ano, "feriados": feriados})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
-# ============ PÁGINAS DE ERRO ============
+# =============================================================================
+# PÁGINAS DE ERRO
+# =============================================================================
+
 @app.errorhandler(404)
 def not_found(e):
     return render_template('404.html'), 404
@@ -447,6 +578,10 @@ def not_found(e):
 @app.errorhandler(500)
 def internal_error(e):
     return render_template('500.html'), 500
+
+# =============================================================================
+# EXECUÇÃO
+# =============================================================================
 
 if __name__ == '__main__':
     app.run(debug=True)
