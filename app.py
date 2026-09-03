@@ -132,9 +132,13 @@ def proximo_dia_util(data_inicio_str, quantidade, feriados):
     """
     Retorna a data final (DD/MM/AAAA) após adicionar N dias úteis,
     considerando a data de início como o 1º dia útil.
+    Ex: 04/01 + 10 dias úteis = 15/01 (pois 04/01 é dia 1, 05/01 é dia 2, ...)
     """
     data = datetime.strptime(data_inicio_str, "%d/%m/%Y")
+    # Se a data de início já for útil (não FDS e não feriado), ela conta como dia 1
     dias_contados = 1 if (data.weekday() < 5 and data.strftime("%d/%m/%Y") not in feriados) else 0
+
+    # Enquanto não atingir a quantidade desejada, avança um dia
     while dias_contados < quantidade:
         data += timedelta(days=1)
         if data.weekday() < 5 and data.strftime("%d/%m/%Y") not in feriados:
@@ -155,6 +159,7 @@ def verificar_prioridade(usuario_id):
             return False, "Usuário não encontrado."
         equipe_id = usuario["equipe_id"]
         nivel = usuario["nivel"]
+        # Usuários da mesma equipe com nível inferior
         inferiores = [u for u in usuarios if u.get("equipe_id") == equipe_id and u.get("nivel", 999) < nivel]
         if not inferiores:
             return True, ""
@@ -165,17 +170,16 @@ def verificar_prioridade(usuario_id):
                 return False, f"Usuário {inf.get('nome')} (nível {inf.get('nivel')}) ainda tem {total} dias; precisa de 25."
         return True, ""
     except Exception as e:
-        return False, f"Erro: {e}"
+        return False, f"Erro ao verificar prioridade: {e}"
 
 def verificar_conflito_plantao(equipe_id, data_inicio_str, data_fim_str, usuario_id, reserva_id=None):
     """
     Verifica se a nova reserva (para usuario_id) deixaria a equipe desfalcada em algum plantão.
-    Agora considera a nova reserva na contagem.
+    Regra: no máximo 1 membro da equipe pode estar de férias em um dia de plantão.
     """
     try:
         usuarios = get_cache("usuarios")
         membros = [u for u in usuarios if u.get("equipe_id") == equipe_id]
-        total_membros = len(membros)
         ferias = get_cache("ferias")
         if reserva_id:
             ferias = [r for r in ferias if str(r.get("id")) != str(reserva_id)]
@@ -198,16 +202,16 @@ def verificar_conflito_plantao(equipe_id, data_inicio_str, data_fim_str, usuario
                 # Adiciona a nova reserva (se o dia estiver dentro do período da nova reserva)
                 if atual >= inicio and atual <= fim:
                     ferias_no_dia += 1
-                # Verifica se todos os membros estão de férias
-                if ferias_no_dia >= total_membros:
-                    return False, f"No dia {data_str} (plantão Equipe {equipe_id}) todos os membros estão de férias."
+                # Regra: no máximo 1 pessoa de férias no plantão
+                if ferias_no_dia > 1:
+                    return False, f"No dia {data_str} (plantão Equipe {equipe_id}) {ferias_no_dia} membros estão de férias. Só é permitido 1."
             atual += timedelta(days=1)
         return True, ""
     except Exception as e:
-        return False, f"Erro: {e}"
+        return False, f"Erro ao verificar conflito: {e}"
 
 # =============================================================================
-# DECORADORES
+# DECORADORES DE AUTENTICAÇÃO
 # =============================================================================
 
 def login_required(f):
@@ -238,6 +242,7 @@ def login():
         if not login or not senha:
             return render_template('login.html', erro="Preencha todos os campos.")
         try:
+            # Verifica se é admin (aba Equipes)
             ws_equipes = get_worksheet("Equipes")
             equipes = ws_equipes.get_all_records()
             admin = next((eq for eq in equipes if eq.get("login_admin") == login), None)
@@ -248,6 +253,7 @@ def login():
                 session['nome'] = admin['nome']
                 session['login'] = login
                 return redirect(url_for('admin_panel'))
+            # Verifica se é usuário comum (aba Usuarios)
             ws_usuarios = get_worksheet("Usuarios")
             usuarios = ws_usuarios.get_all_records()
             user = next((u for u in usuarios if u.get("login") == login), None)
@@ -284,7 +290,7 @@ def admin_panel():
     return render_template('admin.html', equipe=session.get('equipe_id'))
 
 # =============================================================================
-# API TESTE
+# API: TESTE DE CONEXÃO
 # =============================================================================
 
 @app.route('/test-sheet')
@@ -296,7 +302,7 @@ def test_sheet():
         return jsonify({"status": "erro", "mensagem": str(e)}), 500
 
 # =============================================================================
-# API FERIADOS
+# API: FERIADOS
 # =============================================================================
 
 @app.route('/api/feriados')
@@ -305,7 +311,7 @@ def api_feriados():
     return jsonify(config['feriados'])
 
 # =============================================================================
-# API CALENDÁRIO
+# API: CALENDÁRIO
 # =============================================================================
 
 @app.route('/api/calendario')
@@ -322,6 +328,7 @@ def api_calendario():
         ultimo_dia = datetime(ano, mes, 1) + timedelta(days=31)
         ultimo_dia = ultimo_dia.replace(day=1) - timedelta(days=1)
 
+        # Usa cache para ferias e usuarios
         ferias = get_cache("ferias")
         usuarios = get_cache("usuarios")
         membros_equipe = [u['id'] for u in usuarios if u.get('equipe_id') == equipe_id]
@@ -364,7 +371,7 @@ def api_calendario():
         return jsonify({"error": str(e)}), 500
 
 # =============================================================================
-# API RESERVAS
+# API: RESERVAS (GET, POST, DELETE)
 # =============================================================================
 
 @app.route('/api/reservas', methods=['GET', 'POST', 'DELETE'])
@@ -414,7 +421,7 @@ def api_reservas():
             return jsonify({"error": "Usuário não encontrado."}), 404
         equipe_id = user['equipe_id']
 
-        # Conflito de plantão (agora passando usuario_id para considerar a nova reserva)
+        # Conflito de plantão
         pode, msg = verificar_conflito_plantao(equipe_id, data_inicio, data_fim, user_id)
         if not pode:
             return jsonify({"error": msg}), 409
@@ -435,7 +442,7 @@ def api_reservas():
             return jsonify({"error": "ID obrigatório."}), 400
         try:
             ws_ferias = get_worksheet("Ferias")
-            ferias = ws_ferias.get_all_records()
+            ferias = ws_ferias.get_all_records()  # leitura direta para encontrar linha
             idx = None
             for i, r in enumerate(ferias, start=2):
                 if str(r.get('id')) == str(reserva_id):
@@ -452,7 +459,7 @@ def api_reservas():
             return jsonify({"error": str(e)}), 500
 
 # =============================================================================
-# API ADMIN
+# API: ADMIN – USUÁRIOS
 # =============================================================================
 
 @app.route('/api/admin/usuarios', methods=['GET', 'POST', 'PUT'])
@@ -463,6 +470,7 @@ def admin_usuarios():
         try:
             usuarios = get_cache("usuarios")
             da_equipe = [u for u in usuarios if u.get('equipe_id') == equipe_id]
+            # Remove hashes para não expor
             for u in da_equipe:
                 u.pop('senha_hash', None)
             return jsonify(da_equipe)
@@ -518,6 +526,10 @@ def admin_usuarios():
             return jsonify({"success": True})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
+
+# =============================================================================
+# API: ADMIN – CONFIGURAÇÃO
+# =============================================================================
 
 @app.route('/api/admin/config', methods=['GET', 'POST'])
 @admin_required
