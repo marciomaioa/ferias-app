@@ -223,7 +223,6 @@ def verificar_conflito_plantao(equipe_id, data_inicio_str, data_fim_str, usuario
 def validar_periodo_premium(data_inicio_str):
     """Verifica se a data de início é no segundo semestre (>= 01/07)."""
     data = datetime.strptime(data_inicio_str, "%d/%m/%Y")
-    # Consideramos o segundo semestre a partir de 1º de julho
     if data.month < 7:
         return False, "Férias-Prêmio só podem ser solicitadas a partir de 1º de julho."
     return True, ""
@@ -363,12 +362,22 @@ def relatorio_pdf():
     for membro in membros:
         reservas = [r for r in ferias if str(r.get('usuario_id')) == str(membro['id'])]
         reservas.sort(key=lambda x: datetime.strptime(x['data_inicio'], "%d/%m/%Y"))
-        total_dias = sum([int(r.get('dias_uteis', 0)) for r in reservas])
+        total_normal = sum([
+            int(r.get('dias_uteis', 0)) 
+            for r in reservas 
+            if r.get('tipo', 'normal') == 'normal'
+        ])
+        total_premium = sum([
+            int(r.get('dias_uteis', 0)) 
+            for r in reservas 
+            if r.get('tipo', 'normal') == 'premium'
+        ])
         dados_membros.append({
             "nome": membro['nome'],
             "nivel": membro['nivel'],
             "reservas": reservas,
-            "total_dias": total_dias
+            "total_normal": total_normal,
+            "total_premium": total_premium
         })
     dados_membros.sort(key=lambda x: x['nivel'])
 
@@ -409,10 +418,10 @@ def relatorio_pdf():
         <div class="membro">
             <div class="membro-nome">
                 {m['nome']}
-                <span class="nivel">Nível {m['nivel']} – Total: {m['total_dias']}/25 dias</span>
+                <span class="nivel">Nível {m['nivel']} – Normal: {m['total_normal']}/25 | Prêmio: {m['total_premium']}/30</span>
             </div>
             {tabela}
-            <div class="total-dias">Total de dias: {m['total_dias']}</div>
+            <div class="total-dias">Total Normal: {m['total_normal']} | Total Prêmio: {m['total_premium']}</div>
         </div>
         """
 
@@ -665,7 +674,6 @@ def api_reservas():
         if tipo == 'premium':
             if dias_uteis not in [15, 30]:
                 return jsonify({"error": "Férias-Prêmio deve ter 15 ou 30 dias."}), 400
-            # Verifica se a data é no segundo semestre
             pode, msg = validar_periodo_premium(data_inicio)
             if not pode:
                 return jsonify({"error": msg}), 400
@@ -682,11 +690,26 @@ def api_reservas():
         if not pode:
             return jsonify({"error": msg}), 403
 
-        # Verificar total de dias do usuário
+        # Verificar totais separados por tipo
         ferias = get_cache("ferias")
-        total_atual = sum([int(r.get('dias_uteis', 0)) for r in ferias if str(r.get('usuario_id')) == str(user_id)])
-        if total_atual + dias_uteis > 25:
-            return jsonify({"error": f"Usuário já tem {total_atual} dias; limite 25."}), 400
+        total_normal = sum([
+            int(r.get('dias_uteis', 0)) 
+            for r in ferias 
+            if str(r.get('usuario_id')) == str(user_id) and r.get('tipo', 'normal') == 'normal'
+        ])
+        total_premium = sum([
+            int(r.get('dias_uteis', 0)) 
+            for r in ferias 
+            if str(r.get('usuario_id')) == str(user_id) and r.get('tipo', 'normal') == 'premium'
+        ])
+
+        # Verifica limite conforme o tipo da nova reserva
+        if tipo == 'premium':
+            if total_premium + dias_uteis > 30:
+                return jsonify({"error": f"Usuário já tem {total_premium} dias de férias-prêmio; limite 30."}), 400
+        else:
+            if total_normal + dias_uteis > 25:
+                return jsonify({"error": f"Usuário já tem {total_normal} dias de férias normais; limite 25."}), 400
 
         # Obter equipe do usuário
         usuarios = get_cache("usuarios")

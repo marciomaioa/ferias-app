@@ -41,7 +41,6 @@
             {% endif %}
         </ul>
         <div class="tab-content mt-3">
-            <!-- Aba Usuários (existente) -->
             <div class="tab-pane active" id="usuarios">
                 <div class="mb-2 d-flex gap-2 flex-wrap">
                     <button class="btn btn-primary" id="btn-novo-usuario">+ Novo Usuário</button>
@@ -66,8 +65,6 @@
                     <tbody id="tabela-usuarios"></tbody>
                 </table>
             </div>
-
-            <!-- Aba Configuração (existente) -->
             <div class="tab-pane" id="config">
                 <h4>Configuração do ano</h4>
                 <form id="form-config">
@@ -80,8 +77,6 @@
                 </form>
                 <p class="mt-3">Feriados serão carregados automaticamente com base no ano informado.</p>
             </div>
-
-            <!-- Nova Aba: Administradores de Equipe (apenas global_admin) -->
             {% if global_admin %}
             <div class="tab-pane" id="equipes">
                 <div class="mb-2">
@@ -196,7 +191,6 @@
             const modalEquipe = new bootstrap.Modal(document.getElementById('modalEquipe'));
             const globalAdmin = JSON.parse('{{ global_admin | tojson | safe }}');
 
-            // =================== USUÁRIOS COMUNS ===================
             function carregarUsuarios() {
                 $.get('/api/admin/usuarios', function(usuarios) {
                     let html = '';
@@ -328,7 +322,57 @@
                 }
             });
 
-            // =================== ADMINISTRADORES DE EQUIPE (apenas global_admin) ===================
+            // Configuração do ano
+            $('#form-config').submit(function(e) {
+                e.preventDefault();
+                const ano = $('#ano').val();
+                if (!ano) return;
+                $.ajax({
+                    url: '/api/admin/config',
+                    method: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({ano: parseInt(ano)}),
+                    success: function(res) {
+                        if (res.success) {
+                            $('#msg-config').html('<div class="alert alert-success">Feriados atualizados para ' + res.ano + '.</div>');
+                        } else {
+                            $('#msg-config').html('<div class="alert alert-danger">Erro: ' + res.error + '</div>');
+                        }
+                    },
+                    error: function(err) {
+                        $('#msg-config').html('<div class="alert alert-danger">Erro: ' + err.responseJSON.error + '</div>');
+                    }
+                });
+            });
+
+            // Gerar PDF (equipe atual)
+            $('#btn-gerar-pdf').click(function() {
+                const link = document.createElement('a');
+                link.href = '/api/admin/relatorio-pdf';
+                link.target = '_blank';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            });
+
+            if (globalAdmin) {
+                $('#btn-gerar-pdf-todas').click(function() {
+                    const equipes = [1, 2, 3, 4];
+                    equipes.forEach(eq => {
+                        setTimeout(() => {
+                            const link = document.createElement('a');
+                            link.href = '/api/admin/relatorio-pdf?equipe_id=' + eq;
+                            link.target = '_blank';
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
+                        }, 1000 * (eq - 1));
+                    });
+                    alert('Gerando PDFs para todas as equipes. Verifique os downloads.');
+                });
+            }
+
+            // =========== Administradores de equipe (global_admin) ===========
             if (globalAdmin) {
                 function carregarEquipes() {
                     $.get('/api/admin/equipes', function(equipes) {
@@ -409,7 +453,6 @@
                     }
 
                     if (id) {
-                        // Edição
                         const data = { id: parseInt(id), nome, login_admin: login, cor };
                         if (senha) data.senha_admin = senha;
                         $.ajax({
@@ -430,60 +473,8 @@
                             }
                         });
                     } else {
-                        // Criação de nova equipe (não implementado via API, mas pode ser feito manualmente na planilha)
                         alert('Para criar uma nova equipe, adicione manualmente na planilha ou entre em contato com o desenvolvedor.');
                     }
-                });
-            }
-
-            // =================== CONFIGURAÇÃO ===================
-            $('#form-config').submit(function(e) {
-                e.preventDefault();
-                const ano = $('#ano').val();
-                if (!ano) return;
-                $.ajax({
-                    url: '/api/admin/config',
-                    method: 'POST',
-                    contentType: 'application/json',
-                    data: JSON.stringify({ano: parseInt(ano)}),
-                    success: function(res) {
-                        if (res.success) {
-                            $('#msg-config').html('<div class="alert alert-success">Feriados atualizados para ' + res.ano + '.</div>');
-                        } else {
-                            $('#msg-config').html('<div class="alert alert-danger">Erro: ' + res.error + '</div>');
-                        }
-                    },
-                    error: function(err) {
-                        $('#msg-config').html('<div class="alert alert-danger">Erro: ' + err.responseJSON.error + '</div>');
-                    }
-                });
-            });
-
-            // =================== PDF ===================
-            $('#btn-gerar-pdf').click(function() {
-                const link = document.createElement('a');
-                link.href = '/api/admin/relatorio-pdf';
-                link.target = '_blank';
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-            });
-
-            const canGenerateAllPDFs = "{{ 'true' if global_admin else 'false' }}" === "true";
-            if (canGenerateAllPDFs) {
-                $('#btn-gerar-pdf-todas').click(function() {
-                    const equipes = [1, 2, 3, 4];
-                    equipes.forEach(eq => {
-                        setTimeout(() => {
-                            const link = document.createElement('a');
-                            link.href = '/api/admin/relatorio-pdf?equipe_id=' + eq;
-                            link.target = '_blank';
-                            document.body.appendChild(link);
-                            link.click();
-                            document.body.removeChild(link);
-                        }, 1000 * (eq - 1));
-                    });
-                    alert('Gerando PDFs para todas as equipes. Verifique os downloads.');
                 });
             }
         });

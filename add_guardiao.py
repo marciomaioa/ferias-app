@@ -1,4 +1,3 @@
-# add_guardiao.py
 import os
 import json
 import base64
@@ -6,7 +5,6 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from werkzeug.security import generate_password_hash
 
-# ============ CONFIGURAÇÃO ============
 SHEET_ID = "1C-NAw7tGXx97Lb2RwCNC64eRIdBJSHpq1kYk05_z5R4"  # substitua pelo seu
 
 def obter_credenciais():
@@ -26,7 +24,6 @@ def main():
 
     ws_usuarios = sheet.worksheet("Usuarios")
     usuarios = ws_usuarios.get_all_records()
-
     for u in usuarios:
         if u.get('login') == 'guardiao':
             print("Usuário Guardiao já existe.")
@@ -34,17 +31,16 @@ def main():
 
     ids = [int(u.get('id', 0)) for u in usuarios]
     novo_id = max(ids) + 1 if ids else 1
-
     senha_hash = generate_password_hash("Mac140502*")
     ws_usuarios.append_row([
         novo_id,
         "Guardiao",
-        0,
-        0,
+        0,          # equipe_id = 0 (global)
+        0,          # nivel = 0
         "guardiao",
         senha_hash,
-        "TRUE",
-        "TRUE"
+        "TRUE",     # admin
+        "TRUE"      # global_admin
     ])
     print("✅ Usuário Guardiao criado com sucesso!")
     print("   Login: guardiao")
