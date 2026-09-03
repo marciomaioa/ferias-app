@@ -141,6 +141,12 @@ def proximo_dia_util(data_inicio_str, quantidade, feriados):
             dias_contados += 1
     return data.strftime("%d/%m/%Y")
 
+def proximo_dia_corrido(data_inicio_str, quantidade):
+    """Retorna a data final após adicionar N dias corridos (inclui fins de semana e feriados)."""
+    data = datetime.strptime(data_inicio_str, "%d/%m/%Y")
+    data_fim = data + timedelta(days=quantidade - 1)
+    return data_fim.strftime("%d/%m/%Y")
+
 def equipe_plantao_para_data(data_str):
     dt = datetime.strptime(data_str, "%d/%m/%Y")
     dia_ano = dt.timetuple().tm_yday
@@ -263,13 +269,10 @@ def login():
                 session['nome'] = user.get('nome', '')
                 session['login'] = login
                 session['nivel'] = user.get('nivel', 0)
-                # Se for global_admin, redireciona para o painel admin com todas as equipes
                 if session['global_admin']:
                     return redirect(url_for('admin_panel'))
-                # Se for admin de equipe (mas não global), redireciona para admin
                 if session['is_admin']:
                     return redirect(url_for('admin_panel'))
-                # Usuário comum
                 return redirect(url_for('index'))
 
             return render_template('login.html', erro="Login ou senha inválidos.")
@@ -289,10 +292,12 @@ def logout():
 @app.route('/')
 @login_required
 def index():
-    # Se for admin, redireciona para o painel
     if session.get('is_admin'):
         return redirect(url_for('admin_panel'))
-    return render_template('index.html', usuario=session.get('nome'), is_admin=session.get('is_admin'))
+    return render_template('index.html', 
+                           usuario=session.get('nome'), 
+                           is_admin=session.get('is_admin'),
+                           equipe_id=session.get('equipe_id'))
 
 @app.route('/admin')
 @admin_required
@@ -312,12 +317,10 @@ def relatorio_pdf():
     equipe_id = session.get('equipe_id')
     global_admin = session.get('global_admin', False)
     
-    # Se for global_admin, pode escolher a equipe via query param, senão usa a própria
     if global_admin:
         equipe_id_param = request.args.get('equipe_id')
         if equipe_id_param:
             equipe_id = int(equipe_id_param)
-        # Se não especificou, usa a primeira equipe da lista
         if not equipe_id:
             equipes = get_cache("equipes")
             if equipes:
@@ -362,15 +365,18 @@ def relatorio_pdf():
         tabela = """
             <table>
                 <thead>
-                    <tr><th>Período</th><th>Dias úteis</th><th>Status</th></tr>
+                    <tr><th>Período</th><th>Dias</th><th>Tipo</th><th>Status</th></tr>
                 </thead>
                 <tbody>
         """
         for r in m['reservas']:
+            tipo = r.get('tipo', 'normal')
+            dias_texto = f"{r['dias_uteis']} {'úteis' if tipo == 'normal' else 'corridos'}"
             tabela += f"""
                 <tr>
                     <td>{r['data_inicio']} a {r['data_fim']}</td>
-                    <td>{r['dias_uteis']}</td>
+                    <td>{dias_texto}</td>
+                    <td>{tipo.capitalize()}</td>
                     <td>{r['status']}</td>
                 </tr>
             """
@@ -473,7 +479,6 @@ def admin_equipes():
         try:
             ws_equipes = get_worksheet("Equipes")
             equipes = ws_equipes.get_all_records()
-            # Remove a senha_hash para não expor
             for eq in equipes:
                 eq.pop('senha_admin', None)
             return jsonify(equipes)
@@ -498,16 +503,13 @@ def admin_equipes():
                 return jsonify({"error": "Equipe não encontrada."}), 404
 
             header = list(equipes[0].keys())
-            # Atualiza login_admin se enviado
             if 'login_admin' in data:
                 coluna = header.index('login_admin') + 1
                 ws_equipes.update_cell(idx, coluna, data['login_admin'])
-            # Atualiza senha_admin se enviada
             if 'senha_admin' in data and data['senha_admin']:
                 nova_hash = generate_password_hash(data['senha_admin'])
                 coluna = header.index('senha_admin') + 1
                 ws_equipes.update_cell(idx, coluna, nova_hash)
-            # Atualiza nome e cor se enviados
             if 'nome' in data:
                 coluna = header.index('nome') + 1
                 ws_equipes.update_cell(idx, coluna, data['nome'])
@@ -534,8 +536,6 @@ def admin_equipes():
                     break
             if idx is None:
                 return jsonify({"error": "Equipe não encontrada."}), 404
-
-            # Remove a linha
             ws_equipes.delete_rows(idx)
             invalidate_cache("equipes")
             return jsonify({"success": True})
@@ -593,7 +593,8 @@ def api_calendario():
                         reservas_hoje.append({
                             "usuario": user['nome'],
                             "inicio": r['data_inicio'],
-                            "fim": r['data_fim']
+                            "fim": r['data_fim'],
+                            "tipo": r.get('tipo', 'normal')
                         })
 
             dias.append({
@@ -638,35 +639,51 @@ def api_reservas():
         user_id = data['usuario_id']
         data_inicio = data['data_inicio']
         dias_uteis = int(data['dias_uteis'])
+        tipo = data.get('tipo', 'normal')
 
+        # Validações de dias conforme tipo
+        if tipo == 'premium':
+            if dias_uteis not in [15, 30]:
+                return jsonify({"error": "Férias Premium: 15 ou 30 dias corridos."}), 400
+            config = ler_config()
+            feriados = []  # não usado para premium, mas mantido
+            data_fim = proximo_dia_corrido(data_inicio, dias_uteis)
+        else:
+            if dias_uteis not in [10, 15, 25]:
+                return jsonify({"error": "Férias normais: 10, 15 ou 25 dias úteis."}), 400
+            config = ler_config()
+            feriados = config['feriados']
+            data_fim = proximo_dia_util(data_inicio, dias_uteis, feriados)
+
+        # Prioridade
         pode, msg = verificar_prioridade(user_id)
         if not pode:
             return jsonify({"error": msg}), 403
 
-        config = ler_config()
-        feriados = config['feriados']
-        data_fim = proximo_dia_util(data_inicio, dias_uteis, feriados)
-
+        # Verificar total de dias do usuário (soma de dias independente do tipo)
         ferias = get_cache("ferias")
         total_atual = sum([int(r.get('dias_uteis', 0)) for r in ferias if str(r.get('usuario_id')) == str(user_id)])
         if total_atual + dias_uteis > 25:
             return jsonify({"error": f"Usuário já tem {total_atual} dias; limite 25."}), 400
 
+        # Obter equipe do usuário
         usuarios = get_cache("usuarios")
         user = next((u for u in usuarios if str(u['id']) == str(user_id)), None)
         if not user:
             return jsonify({"error": "Usuário não encontrado."}), 404
         equipe_id = user['equipe_id']
 
+        # Conflito de plantão (independente do tipo)
         pode, msg = verificar_conflito_plantao(equipe_id, data_inicio, data_fim, user_id)
         if not pode:
             return jsonify({"error": msg}), 409
 
+        # Inserir na planilha
         ws_ferias = get_worksheet("Ferias")
         ids = [int(r.get('id', 0)) for r in ferias]
         novo_id = max(ids) + 1 if ids else 1
         ws_ferias.append_row([
-            novo_id, user_id, data_inicio, data_fim, dias_uteis, "aprovado"
+            novo_id, user_id, data_inicio, data_fim, dias_uteis, "aprovado", tipo
         ])
         invalidate_cache("ferias")
         return jsonify({"success": True, "id": novo_id})
@@ -708,10 +725,8 @@ def admin_usuarios():
         try:
             usuarios = get_cache("usuarios")
             if global_admin:
-                # Retorna todos os usuários
                 da_equipe = usuarios
             else:
-                # Apenas da equipe do admin
                 da_equipe = [u for u in usuarios if u.get('equipe_id') == equipe_id]
             for u in da_equipe:
                 u.pop('senha_hash', None)
@@ -730,7 +745,6 @@ def admin_usuarios():
             ids = [int(u.get('id', 0)) for u in usuarios]
             novo_id = max(ids) + 1 if ids else 1
             senha_hash = generate_password_hash(data['senha'])
-            # Se global_admin, pode escolher a equipe; senão, usa a própria
             equipe_destino = data.get('equipe_id') if global_admin else equipe_id
             if not equipe_destino:
                 return jsonify({"error": "Equipe não informada."}), 400
@@ -758,7 +772,6 @@ def admin_usuarios():
                     break
             if idx is None:
                 return jsonify({"error": "Usuário não encontrado."}), 404
-            # Se não for global_admin, só pode editar usuários da própria equipe
             if not global_admin:
                 usuario_alvo = usuarios[idx-2]
                 if usuario_alvo.get('equipe_id') != equipe_id:
@@ -793,15 +806,12 @@ def admin_usuarios():
                     break
             if idx is None:
                 return jsonify({"error": "Usuário não encontrado."}), 404
-            # Verifica permissão
             if not global_admin:
                 usuario_alvo = usuarios[idx-2]
                 if usuario_alvo.get('equipe_id') != equipe_id:
                     return jsonify({"error": "Permissão negada."}), 403
-            # Não pode excluir a si mesmo
             if str(user_id) == str(session.get('user_id')):
                 return jsonify({"error": "Não é possível excluir o próprio usuário."}), 400
-            # Remove linha
             ws_usuarios.delete_rows(idx)
             invalidate_cache("usuarios")
             return jsonify({"success": True})

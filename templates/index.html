@@ -29,9 +29,12 @@
     </style>
 </head>
 <body>
+    <div id="app-data" data-user-id="{{ session.get('user_id') }}" style="display:none;"></div>
     <div class="container">
         <div class="d-flex justify-content-between align-items-center mb-3">
-            <h2>📅 Férias - {{ usuario }}</h2>
+            <h2>📅 Férias - {{ usuario }} 
+                <span class="badge bg-primary" style="font-size: 0.6em;">Equipe {{ equipe_id }}</span>
+            </h2>
             <div>
                 {% if is_admin %}
                     <a href="/admin" class="btn btn-warning me-2">Admin</a>
@@ -77,16 +80,21 @@
                 <div class="modal-body">
                     <p><strong>Data de início selecionada:</strong> <span id="data-inicio-selecionada"></span></p>
                     <div class="mb-3">
-                        <label for="dias-opcao" class="form-label">Quantos dias úteis?</label>
+                        <label for="tipo-ferias" class="form-label">Tipo de férias</label>
+                        <select id="tipo-ferias" class="form-select">
+                            <option value="normal">Normal (dias úteis)</option>
+                            <option value="premium">Premium (dias corridos)</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="dias-opcao" class="form-label">Quantos dias?</label>
                         <select id="dias-opcao" class="form-select">
-                            <option value="10">10 dias</option>
-                            <option value="15">15 dias</option>
-                            <option value="25">25 dias</option>
+                            <!-- preenchido via JS -->
                         </select>
                     </div>
                     <div class="resumo">
                         <p><strong>Data de fim calculada:</strong> <span id="data-fim-preview"></span></p>
-                        <p><strong>Dias úteis totais:</strong> <span id="dias-uteis-preview"></span></p>
+                        <p><strong>Dias totais:</strong> <span id="dias-uteis-preview"></span></p>
                         <p id="conflito-msg" class="text-danger"></p>
                         <p id="reservas-msg" class="text-info"></p>
                     </div>
@@ -128,7 +136,7 @@
 
                         let tooltip = dia.data;
                         if (dia.reservas && dia.reservas.length > 0) {
-                            tooltip += '\nReservas: ' + dia.reservas.map(r => r.usuario + ' ('+r.inicio+' a '+r.fim+')').join('; ');
+                            tooltip += '\nReservas: ' + dia.reservas.map(r => r.usuario + ' ('+r.inicio+' a '+r.fim+') - ' + r.tipo).join('; ');
                         }
 
                         let reservasJson = JSON.stringify(dia.reservas).replace(/"/g, '&quot;');
@@ -151,34 +159,50 @@
                 $('#dias-uteis-preview').text('');
                 $('#conflito-msg').text('');
                 $('#reservas-msg').text('');
+                // Define tipo normal por padrão
+                $('#tipo-ferias').val('normal');
+                atualizarOpcoesDias('normal');
                 $('#modalReserva').modal('show');
                 calcularPreview();
             };
 
+            function atualizarOpcoesDias(tipo) {
+                const diasSelect = $('#dias-opcao');
+                diasSelect.empty();
+                if (tipo === 'normal') {
+                    diasSelect.append('<option value="10">10 dias úteis</option>');
+                    diasSelect.append('<option value="15">15 dias úteis</option>');
+                    diasSelect.append('<option value="25">25 dias úteis</option>');
+                } else {
+                    diasSelect.append('<option value="15">15 dias corridos</option>');
+                    diasSelect.append('<option value="30">30 dias corridos</option>');
+                }
+            }
+
+            $('#tipo-ferias').change(function() {
+                const tipo = $(this).val();
+                atualizarOpcoesDias(tipo);
+                calcularPreview();
+            });
+
             function calcularPreview() {
                 const inicio = dataSelecionada;
                 const dias = parseInt($('#dias-opcao').val());
-                $.get('/api/feriados', function(feriados) {
-                    let feriadosList = feriados || [];
-                    let data = new Date(inicio.split('/')[2], inicio.split('/')[1]-1, inicio.split('/')[0]);
-                    let diasAdicionados = 0;
-                    let dataFim = new Date(data);
-                    while (diasAdicionados < dias) {
-                        dataFim.setDate(dataFim.getDate() + 1);
-                        let diaStr = ('0'+dataFim.getDate()).slice(-2)+'/'+('0'+(dataFim.getMonth()+1)).slice(-2)+'/'+dataFim.getFullYear();
-                        if (dataFim.getDay() !== 0 && dataFim.getDay() !== 6 && !feriadosList.includes(diaStr)) {
-                            diasAdicionados++;
-                        }
-                    }
-                    const fimStr = ('0'+dataFim.getDate()).slice(-2)+'/'+('0'+(dataFim.getMonth()+1)).slice(-2)+'/'+dataFim.getFullYear();
-                    $('#data-fim-preview').text(fimStr);
-                    $('#dias-uteis-preview').text(dias + ' dias úteis');
+                const tipo = $('#tipo-ferias').val();
 
+                if (tipo === 'premium') {
+                    let data = new Date(inicio.split('/')[2], inicio.split('/')[1]-1, inicio.split('/')[0]);
+                    data.setDate(data.getDate() + dias - 1);
+                    const fimStr = ('0'+data.getDate()).slice(-2)+'/'+('0'+(data.getMonth()+1)).slice(-2)+'/'+data.getFullYear();
+                    $('#data-fim-preview').text(fimStr);
+                    $('#dias-uteis-preview').text(dias + ' dias corridos');
+                    $('#conflito-msg').text('');
+                    // Verificar reservas no período (apenas informativo)
                     let reservasMsg = '';
                     if (dadosCalendario) {
                         let reservasNoPeriodo = [];
                         let inicioDt = new Date(inicio.split('/')[2], inicio.split('/')[1]-1, inicio.split('/')[0]);
-                        let fimDt = new Date(dataFim);
+                        let fimDt = new Date(data);
                         for (let d = new Date(inicioDt); d <= fimDt; d.setDate(d.getDate()+1)) {
                             let diaStr = ('0'+d.getDate()).slice(-2)+'/'+('0'+(d.getMonth()+1)).slice(-2)+'/'+d.getFullYear();
                             let diaObj = dadosCalendario.dias.find(item => item.data === diaStr);
@@ -191,11 +215,50 @@
                             }
                         }
                         if (reservasNoPeriodo.length > 0) {
-                            reservasMsg = '⚠️ Período com reservas de outros membros: ' + reservasNoPeriodo.map(r => r.usuario + ' ('+r.inicio+' a '+r.fim+')').join('; ');
+                            reservasMsg = '⚠️ Período com reservas de outros membros: ' + reservasNoPeriodo.map(r => r.usuario + ' ('+r.inicio+' a '+r.fim+') - ' + r.tipo).join('; ');
                         }
                     }
                     $('#reservas-msg').text(reservasMsg);
-                });
+                } else {
+                    $.get('/api/feriados', function(feriados) {
+                        let feriadosList = feriados || [];
+                        let data = new Date(inicio.split('/')[2], inicio.split('/')[1]-1, inicio.split('/')[0]);
+                        let diasAdicionados = 0;
+                        let dataFim = new Date(data);
+                        while (diasAdicionados < dias) {
+                            dataFim.setDate(dataFim.getDate() + 1);
+                            let diaStr = ('0'+dataFim.getDate()).slice(-2)+'/'+('0'+(dataFim.getMonth()+1)).slice(-2)+'/'+dataFim.getFullYear();
+                            if (dataFim.getDay() !== 0 && dataFim.getDay() !== 6 && !feriadosList.includes(diaStr)) {
+                                diasAdicionados++;
+                            }
+                        }
+                        const fimStr = ('0'+dataFim.getDate()).slice(-2)+'/'+('0'+(dataFim.getMonth()+1)).slice(-2)+'/'+dataFim.getFullYear();
+                        $('#data-fim-preview').text(fimStr);
+                        $('#dias-uteis-preview').text(dias + ' dias úteis');
+
+                        let reservasMsg = '';
+                        if (dadosCalendario) {
+                            let reservasNoPeriodo = [];
+                            let inicioDt = new Date(inicio.split('/')[2], inicio.split('/')[1]-1, inicio.split('/')[0]);
+                            let fimDt = new Date(dataFim);
+                            for (let d = new Date(inicioDt); d <= fimDt; d.setDate(d.getDate()+1)) {
+                                let diaStr = ('0'+d.getDate()).slice(-2)+'/'+('0'+(d.getMonth()+1)).slice(-2)+'/'+d.getFullYear();
+                                let diaObj = dadosCalendario.dias.find(item => item.data === diaStr);
+                                if (diaObj && diaObj.reservas && diaObj.reservas.length > 0) {
+                                    diaObj.reservas.forEach(r => {
+                                        if (!reservasNoPeriodo.some(item => item.usuario === r.usuario && item.inicio === r.inicio && item.fim === r.fim)) {
+                                            reservasNoPeriodo.push(r);
+                                        }
+                                    });
+                                }
+                            }
+                            if (reservasNoPeriodo.length > 0) {
+                                reservasMsg = '⚠️ Período com reservas de outros membros: ' + reservasNoPeriodo.map(r => r.usuario + ' ('+r.inicio+' a '+r.fim+') - ' + r.tipo).join('; ');
+                            }
+                        }
+                        $('#reservas-msg').text(reservasMsg);
+                    });
+                }
             }
 
             $('#dias-opcao').change(calcularPreview);
@@ -203,7 +266,8 @@
             $('#btn-confirmar-reserva').click(function() {
                 const inicio = dataSelecionada;
                 const dias = parseInt($('#dias-opcao').val());
-                const usuarioId = "{{ session.get('user_id') | tojson | safe }}";
+                const tipo = $('#tipo-ferias').val();
+                const usuarioId = Number($('#app-data').data('user-id')) || null;
                 $.ajax({
                     url: '/api/reservas',
                     method: 'POST',
@@ -211,7 +275,8 @@
                     data: JSON.stringify({
                         usuario_id: usuarioId,
                         data_inicio: inicio,
-                        dias_uteis: dias
+                        dias_uteis: dias,
+                        tipo: tipo
                     }),
                     success: function(res) {
                         if (res.success) {
@@ -234,8 +299,10 @@
                     let lista = '';
                     let total = 0;
                     reservas.forEach(r => {
+                        const tipo = r.tipo || 'normal';
+                        const diasTexto = `${r.dias_uteis} ${tipo === 'normal' ? 'úteis' : 'corridos'}`;
                         lista += `<li class="list-group-item d-flex justify-content-between align-items-center">
-                                    ${r.data_inicio} a ${r.data_fim} (${r.dias_uteis} dias) - ${r.status}
+                                    ${r.data_inicio} a ${r.data_fim} (${diasTexto}) - ${tipo.charAt(0).toUpperCase() + tipo.slice(1)} - ${r.status}
                                     <button class="btn btn-sm btn-danger" onclick="cancelarReserva(${r.id})">Cancelar</button>
                                 </li>`;
                         total += r.dias_uteis;
