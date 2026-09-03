@@ -118,12 +118,20 @@ def calcular_dias_uteis(data_inicio_str, data_fim_str, feriados):
     return dias
 
 def proximo_dia_util(data_inicio_str, quantidade, feriados):
+    """
+    Retorna a data final (DD/MM/AAAA) após adicionar N dias úteis,
+    considerando a data de início como o 1º dia útil.
+    Ex: 04/01 + 10 dias úteis = 15/01 (pois 04/01 é dia 1, 05/01 é dia 2, ...)
+    """
     data = datetime.strptime(data_inicio_str, "%d/%m/%Y")
-    dias_adicionados = 0
-    while dias_adicionados < quantidade:
+    # Se a data de início já for útil (não FDS e não feriado), ela conta como dia 1
+    dias_contados = 1 if (data.weekday() < 5 and data.strftime("%d/%m/%Y") not in feriados) else 0
+    
+    # Enquanto não atingir a quantidade desejada, avança um dia
+    while dias_contados < quantidade:
         data += timedelta(days=1)
         if data.weekday() < 5 and data.strftime("%d/%m/%Y") not in feriados:
-            dias_adicionados += 1
+            dias_contados += 1
     return data.strftime("%d/%m/%Y")
 
 def equipe_plantao_para_data(data_str):
